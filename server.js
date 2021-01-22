@@ -8,7 +8,7 @@ let link = "https://review7.cre.ma/fila.co.kr/products/reviews?app=0&iframe=1&if
 let url = new URL(link);
 
 
-async function getNum() {
+function getNum() {
     request(link + 1)
         .then(res => {
             const $ = cheerio.load(res);
@@ -25,12 +25,13 @@ function getReviewData(num, resolve) {
     request(url.toString())
         .then(res => {
             const $ = cheerio.load(res);
-            const block = $(".products_reviews_list_review__lcontents");
+            const block = $(".products_reviews_list_review__inner");
             return block.map((index, item) => {
                 let content = $(item).find("div.review_message").text().trim();
                 let point = 5 - $(item).find('div.products_reviews_list_review__score_star_rating')
                     .children("span.star--empty").length;
-                return { content: content, point: point };
+                let date = $(item).find("div.products_reviews_list_review__info_value")[1].children[0].data.trim();
+                return { content: content, point: point, date: date };
             }).toArray();
         })
         .then(res => resolve(res))
@@ -39,6 +40,31 @@ function getReviewData(num, resolve) {
 
 app.get("/results", (req, respond) => {
     request(link)
+        .then(res => {
+            var $ = cheerio.load(res);
+            var num = $("span.reviews-count").text();
+            return Math.floor(Number(num.replace(/,/g, "")) / 5) + 1;
+        })
+        .then(res => {
+            console.log(res);
+            let requests = Array.from(Array(res), (_, i) => i);
+            Promise.map(requests, (request) => {
+                return new Promise(resolve => getReviewData(request, resolve));
+            }, { concurrency: 100 })
+                .then(results => results.flatMap(result => result))
+                .then(results => {
+                    respond.json(sortJsonArray(results, 'point', 'asc'));
+                    respond.end();
+                });
+        })
+        .catch(err => console.log("request error: ", err));
+});
+
+app.post("/test", (req, res) => {
+    let data = req.body;
+    let url = data.url;
+    // data processing
+    request(url)
         .then(res => {
             var $ = cheerio.load(res);
             var num = $("span.reviews-count").text();
