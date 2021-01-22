@@ -6,6 +6,8 @@ const Promise = require("bluebird");
 const sortJsonArray = require('sort-json-array');
 const bodyParser = require('body-parser');
 
+var CONCUR_CONSTANT = 80;
+
 app.use(bodyParser.json());
 
 app.get('/connect', (req, respond) => {
@@ -69,13 +71,15 @@ app.post("/review", (req, respond) => {
         .then(res => {
             var $ = cheerio.load(res);
             var num = $("span.reviews-count").text();
-            return Math.floor(Number(num.replace(/,/g, "")) / 5) + 1;
+            var numElem = $("li.review").length;
+            console.log("nubmer: ", numElem);
+            return Math.floor(Number(num.replace(/,/g, "")) / numElem) + 1;
         })
         .then(res => {
             let requests = Array.from(Array(res), (_, i) => i);
             Promise.map(requests, (request) => {
                 return new Promise(resolve => getReviewData(url, request, resolve));
-            }, { concurrency: 100 })
+            }, { concurrency: CONCUR_CONSTANT })
                 .then(results => results.flatMap(result => result))
                 .then(results => {
                     respond.json(sortJsonArray(results, 'point', 'asc'));
@@ -98,8 +102,12 @@ function getReviewData(link, num, resolve) {
                 let content = $(item).find("div.review_message").text().trim();
                 let point = 5 - $(item).find('div.products_reviews_list_review__score_star_rating')
                     .children("span.star--empty").length;
-                let date = $(item).find("div.products_reviews_list_review__info_value")[1].children[0].data.trim();
-                return { content: content, point: point, date: date };
+                let pointWord = $(item).find("div.products_reviews_list_review__score_text_rating").text().replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
+                let info = $(item).find("div.products_reviews_list_review__info_value")
+                    .map((index, item) => {
+                        return item.children[0].data.trim();
+                    }).toArray();
+                return { content: content, point: point, pointWord: pointWord, user: info.find(i => i.includes("*")), date: info.find(i => i.split('. ').length == 3) };
             }).toArray();
         })
         .then(res => resolve(res))
