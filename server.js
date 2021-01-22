@@ -4,8 +4,9 @@ const request = require("request-promise-native");
 const cheerio = require("cheerio");
 const Promise = require("bluebird");
 const sortJsonArray = require('sort-json-array');
-let link = "https://review7.cre.ma/fila.co.kr/products/reviews?app=0&iframe=1&iframe_id=crema-product-reviews-3&nonmember_token=&page=2&parent_url=https%3A%2F%2Fwww.fila.co.kr%2Fproduct%2Fview.asp%3FProductNo%3D35875&product_code=11001RM01153444&secure_device_token=V249be7fadc8a0f476ec5a44ae71b4ffb1cf17966d4fac349f772b1076c19d72fc&widget_env=100&widget_style=";
-let url = new URL(link);
+const bodyParser = require('body-parser');
+
+app.use(bodyParser.json());
 
 app.get('/connect', (req, respond) => {
     request(link)
@@ -21,14 +22,19 @@ app.get('/connect', (req, respond) => {
                 return new Promise(resolve => getReviewData(request, resolve));
             }, { concurrency: 100 })
                 .then(results => results.flatMap(result => result))
+                .then(results => results.flatMap(result => result.content))
                 .then(results => {
-                    results.flatMap(result => result.content);
-                }).then(results => {
-
+                    console.log(results.join('.'));
+                    respond.write("<p>" + results.join('.') + "</p>");
                     respond.end();
                 });
         })
         .catch(err => console.log("request error: ", err));
+});
+
+app.get('/hello', (req, res) => {
+    res.send("hello");
+    res.end();
 });
 
 app.get("/results", (req, respond) => {
@@ -53,10 +59,12 @@ app.get("/results", (req, respond) => {
         .catch(err => console.log("request error: ", err));
 });
 
-app.post("/test", (req, res) => {
+app.post("/review", (req, respond) => {
     let data = req.body;
+    // console.log(req)
     let url = data.url;
     // data processing
+    console.log("신호를 받음");
     request(url)
         .then(res => {
             var $ = cheerio.load(res);
@@ -64,10 +72,9 @@ app.post("/test", (req, res) => {
             return Math.floor(Number(num.replace(/,/g, "")) / 5) + 1;
         })
         .then(res => {
-            console.log(res);
             let requests = Array.from(Array(res), (_, i) => i);
             Promise.map(requests, (request) => {
-                return new Promise(resolve => getReviewData(request, resolve));
+                return new Promise(resolve => getReviewData(url, request, resolve));
             }, { concurrency: 100 })
                 .then(results => results.flatMap(result => result))
                 .then(results => {
@@ -80,19 +87,8 @@ app.post("/test", (req, res) => {
 
 app.listen(3000);
 
-function getNum() {
-    request(link + 1)
-        .then(res => {
-            const $ = cheerio.load(res);
-            var num = $("span.reviews-count").text();
-            return Math.floor(Number(num) / 10) + 1;
-        })
-        .then(res => {
-            return res;
-        });
-}
-
-function getReviewData(num, resolve) {
+function getReviewData(link, num, resolve) {
+    let url = new URL(link);
     url.searchParams.set("page", num);
     request(url.toString())
         .then(res => {
