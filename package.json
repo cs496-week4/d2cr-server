@@ -11,10 +11,12 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^0.21.1",
+    "bluebird": "^3.7.2",
     "cheerio": "^1.0.0-rc.5",
     "express": "^4.17.1",
     "node-fetch": "^2.6.1",
     "request": "^2.88.2",
-    "request-promise-native": "^1.0.9"
+    "request-promise-native": "^1.0.9",
+    "url": "^0.11.0"
   }
 }
