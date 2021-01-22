@@ -5,8 +5,19 @@ const cheerio = require("cheerio");
 const Promise = require("bluebird");
 const sortJsonArray = require('sort-json-array');
 const bodyParser = require('body-parser');
+const mongoose = require('mongoose');
 
-var CONCUR_CONSTANT = 80;
+const CONCUR_CONSTANT = 80;
+
+const ReviewSchema = new mongoose.Schema({
+    content: String,
+    point: Number,
+    pointWord: String,
+    user: String,
+    date: String
+})
+
+const Review = mongoose.model("Review", ReviewSchema);
 
 app.use(bodyParser.json());
 
@@ -82,7 +93,24 @@ app.post("/review", (req, respond) => {
             }, { concurrency: CONCUR_CONSTANT })
                 .then(results => results.flatMap(result => result))
                 .then(results => {
-                    respond.json(sortJsonArray(results, 'point', 'asc'));
+                    respond.json(results);
+                    // respond.json(sortJsonArray(results, 'point', 'asc'));
+                    // store in data base
+                    connectDB("Review")
+                        .then(_ => {
+                            console.log("DB 저장 시작");
+                            for (i = 0; i < results.length; i++) {
+                                var newReview = new Review({
+                                    content: results.content,
+                                    point: results.pointWord,
+                                    pointWord: results.point,
+                                    user: results.user,
+                                    date: results.date
+                                })
+                                newReview.save()
+                            }
+                        })
+                    respond.json(results);
                     respond.end();
                 });
         })
@@ -112,4 +140,15 @@ function getReviewData(link, num, resolve) {
         })
         .then(res => resolve(res))
         .catch(err => console.log("error"));
+}
+
+function connectDB(dataBase) {
+    return mongoose
+        .connect("mongodb://127.0.0.1:27017/" + dataBase, {
+            useNewUrlParser: true,
+            useCreateIndex: true,
+            useUnifiedTopology: true
+        })
+        .then(() => console.log("connect to DB"))
+        .catch(err => console.error(err));
 }
