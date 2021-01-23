@@ -17,7 +17,11 @@ const ReviewSchema = new mongoose.Schema({
     date: String
 })
 
-const Review = mongoose.model("Review", ReviewSchema);
+const UserSchema = new mongoose.Schema({
+    reviews: Array
+})
+
+const Page = mongoose.model("page", UserSchema);
 
 app.use(bodyParser.json());
 
@@ -87,23 +91,28 @@ app.post("/review", (req, respond) => {
             return Math.floor(Number(num.replace(/,/g, "")) / numElem) + 1;
         })
         .then(res => {
-            connectDB("Review");
             let requests = Array.from(Array(res), (_, i) => i);
             return Promise.map(requests, (request) => {
                 return new Promise(resolve => getReviewData(url, request, resolve));
             }, { concurrency: CONCUR_CONSTANT })
                 .then(results => results.flatMap(result => result))
                 .then(results => {
-                    // respond.json(results);
-                    // respond.json(sortJsonArray(results, 'point', 'asc'));
                     // store in data base
-                    console.log("다 끝났다~~~~")
-                    respond.json(results);
-                    return respond.end();
+                    return connectDB("Users")
+                        .then(_ => {
+                            let data = new Page({
+                                reviews: results
+                            });
+                            return data.save()
+                                .then(result => result.id)
+                                .then(id => {
+                                    mongoose.connection.close();
+                                    respond.send(id);
+                                    respond.end();
+                                })
+                        })
                 })
         })
-        .then(_ => console.log("다 끝났다."))
-        // .then(_ => mongoose.connection.close())
         .catch(err => console.log("request error: ", err));
 });
 
@@ -127,14 +136,6 @@ function getReviewData(link, num, resolve) {
                     }).toArray();
                 let user = info.find(i => i.includes("*"));
                 let date = info.find(i => i.split('. ').length == 3);
-                let newReview = new Review({
-                    content: content,
-                    point: point,
-                    pointWord: pointWord,
-                    user: user,
-                    date: date
-                })
-                newReview.save()
                 return { content: content, point: point, pointWord: pointWord, user: user, date: date };
             }).toArray();
         })
