@@ -36,28 +36,18 @@ const Page = mongoose.model("page", UserSchema);
 app.use(cors());
 app.use(bodyParser.json());
 
-app.get('/connect', (req, respond) => {
-    request(link)
-        .then(res => {
-            var $ = cheerio.load(res);
-            var num = $("span.reviews-count").text();
-            return Math.floor(Number(num.replace(/,/g, "")) / 5) + 1;
+app.get('/morpheme/:pageId', (req, res) => {
+    connectDB("Users")
+        .then(_ => {
+            Page.findById(req.params.pageId)
+                .then(result => {
+                    let reviews = result.reviews;
+                    let data = reviews.map(elem => elem.content).join(".")
+                    mongoose.connection.close();
+                    res.send(data);
+                    res.end();
+                })
         })
-        .then(res => {
-            console.log(res);
-            let requests = Array.from(Array(res), (_, i) => i);
-            Promise.map(requests, (request) => {
-                return new Promise(resolve => getReviewData(request, resolve));
-            }, { concurrency: 100 })
-                .then(results => results.flatMap(result => result))
-                .then(results => results.flatMap(result => result.content))
-                .then(results => {
-                    console.log(results.join('.'));
-                    respond.write("<p>" + results.join('.') + "</p>");
-                    respond.end();
-                });
-        })
-        .catch(err => console.log("request error: ", err));
 });
 
 app.get('/hello', (req, res) => {
