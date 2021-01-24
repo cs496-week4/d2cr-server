@@ -3,17 +3,15 @@ const app = express();
 const request = require("request-promise-native");
 const cheerio = require("cheerio");
 const Promise = require("bluebird");
-const sortJsonArray = require('sort-json-array');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
-const { filter } = require('bluebird');
 const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
 
 
 
-const CONCUR_CONSTANT = 80;
+const CONCUR_CONSTANT = 10;
 
 const ReviewSchema = new mongoose.Schema({
     content: String,
@@ -36,6 +34,12 @@ const Page = mongoose.model("page", UserSchema);
 app.use(cors());
 app.use(bodyParser.json());
 
+app.get('/hello', (req, res) => {
+    res.send("hello");
+    res.end();
+});
+
+
 app.get('/morpheme/:pageId', (req, res) => {
     connectDB("Users")
         .then(_ => {
@@ -50,27 +54,24 @@ app.get('/morpheme/:pageId', (req, res) => {
         })
 });
 
-app.get('/hello', (req, res) => {
-    res.send("hello");
-    res.end();
-});
-
 app.get("/results", (req, respond) => {
+    let link = "http://review5.cre.ma/thedaze.kr/mobile/products/reviews?app=0&device=mobile&iframe=1&iframe_id=crema-product-reviews-1&nonmember_token=&page=4&parent_url=http%3A%2F%2Fm.dejou.co.kr%2Fproduct%2Fdetail.html%3Fproduct_no%3D13175%26cate_no%3D41%26display_group%3D2%26crema-product-reviews-1-page%3D2%26crema-product-reviews-1-sort%3D30&product_code=13175&secure_device_token=V28cc48267afa62871f258cc4edf8004f407108f4ee3c41ede39c508336c49606e&sort=30&widget_env=100&widget_id=17&widget_style="
     request(link)
         .then(res => {
             var $ = cheerio.load(res);
             var num = $("span.reviews-count").text();
-            return Math.floor(Number(num.replace(/,/g, "")) / 5) + 1;
+            var numElem = $("li.review").length;
+            return Math.ceil(Number(num.replace(/,/g, "")) / numElem);
         })
         .then(res => {
             console.log(res);
-            let requests = Array.from(Array(res), (_, i) => i);
+            let requests = Array.from(Array(10), (_, i) => i);
             Promise.map(requests, (request) => {
-                return new Promise(resolve => getReviewData(request, resolve));
-            }, { concurrency: 100 })
+                return new Promise(resolve => getReviewData(link, request, resolve));
+            }, { concurrency: 10 })
                 .then(results => results.flatMap(result => result))
                 .then(results => {
-                    respond.json(sortJsonArray(results, 'point', 'asc'));
+                    respond.json(results);
                     respond.end();
                 });
         })
@@ -86,37 +87,49 @@ app.post("/review", (req, respond) => {
     request(url)
         .then(res => {
             var $ = cheerio.load(res);
-            var num = $("span.reviews-count").text();
-            var numElem = $("li.review").length;
-            console.log("nubmer: ", numElem);
-            return Math.ceil(Number(num.replace(/,/g, "")) / numElem);
+            if ($("li.review").html() == null) {
+                console.log("잘못된 데이터 입니다.");
+                return null
+            } else {
+                var num = $("span.reviews-count").text();
+                var numElem = $("li.review").length;
+                console.log("nubmer: ", numElem);
+                return Math.ceil(Number(num.replace(/,/g, "")) / numElem);
+            }
         })
         .then(res => {
-            let requests = Array.from(Array(res), (_, i) => i + 1);
-            return Promise.map(requests, (request) => {
-                return new Promise(resolve => getReviewData(url, request, resolve));
-            }, { concurrency: CONCUR_CONSTANT })
-                .then(results => results.flatMap(result => result))
-                .then(results => {
-                    // store in data base
-                    return connectDB("Users")
-                        .then(_ => {
-                            let data = new Page({
-                                reviews: results,
-                                curReviews: results,
-                                curQueries: "",
-                                wordCloud: [],
-                                monthlyRate: []
-                            });
-                            return data.save()
-                                .then(result => result.id)
-                                .then(id => {
-                                    mongoose.connection.close();
-                                    respond.send(id);
-                                    respond.end();
-                                })
-                        })
-                })
+            console.log(res);
+            if (res == null) {
+                respond.status(202);
+                respond.send("Hello");
+                respond.end();
+            } else {
+                let requests = Array.from(Array(res), (_, i) => i + 1);
+                return Promise.map(requests, (request) => {
+                    return new Promise(resolve => getReviewData(url, request, resolve));
+                }, { concurrency: CONCUR_CONSTANT })
+                    .then(results => results.flatMap(result => result))
+                    .then(results => {
+                        // store in data base
+                        return connectDB("Users")
+                            .then(_ => {
+                                let data = new Page({
+                                    reviews: results,
+                                    curReviews: results,
+                                    curQueries: "",
+                                    wordCloud: [],
+                                    monthlyRate: []
+                                });
+                                return data.save()
+                                    .then(result => result.id)
+                                    .then(id => {
+                                        mongoose.connection.close();
+                                        respond.send(id);
+                                        respond.end();
+                                    })
+                            })
+                    })
+            }
         })
         .catch(err => console.log("request error: ", err));
 });
@@ -188,29 +201,44 @@ function getReviewData(link, num, resolve) {
     request(url.toString())
         .then(res => {
             const $ = cheerio.load(res);
-            const block = $(".products_reviews_list_review__inner");
+            const block = $("li.review");
             return block.map((index, item) => {
-
-                let content = $(item).find("div.review_message").text().trim();
-
-                if (content.includes("신발 예쁘고 잘 받았는데") || content.includes("평 남겨달라기에")) console.log("중복리뷰 발견: page -" + num)
-
-                let star = 5 - $(item).find('div.products_reviews_list_review__score_star_rating')
-                    .children("span.star--empty").length;
-                let rateWord = $(item).find("div.products_reviews_list_review__score_text_rating").text().replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
-                let position = rateWordList.indexOf(rateWord);
-                let rate = (position == -1) ? star : position + 1;
+                // let content = $(item).find("div.review_message").text().trim();
+                let content = getContent($(item));
+                let rate = getRate($(item));
                 let info = $(item).find("div.products_reviews_list_review__info_value")
                     .map((index, item) => {
                         return item.children[0].data.trim();
                     }).toArray();
-                let user = info.find(i => i.includes("*"));
+                let user = getUser($(item), info)
                 let date = info.find(i => i.split('. ').length == 3);
-                return { content: content, rate: rate, rateWord: rateWord, user: user, date: date };
+                return { content: content, rate: rate, user: user, date: date };
             }).toArray();
         })
-        .then(res => resolve(res))
+        .then(res => {
+            // console.log(res);
+            return resolve(res);
+        })
         .catch(err => console.log("error: ", err));
+}
+
+function getContent(item) {
+    return item.find("div.js-translate-review-message")[0].children[0].data.trim();
+}
+
+function getRate(item) {
+    let temp = item.find("div.products_reviews_list_review__score_text_rating").text().replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
+    let rateWord = (temp != '') ? temp : item.find("div.review_list__score_right_item")[0].children[0].data.replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
+    let position = rateWordList.indexOf(rateWord);
+    return rate = (position == -1)
+        ? (5 - $(item).find('div.products_reviews_list_review__score_star_rating')
+            .children("span.star--empty").length)
+        : position + 1;
+}
+
+function getUser(item, info) {
+    let temp1 = info.find(i => i.includes("*"));
+    return (temp1 != undefined) ? temp1 : item.find("div.review_list__author")[0].children[0].data.trim();
 }
 
 function connectDB(dataBase) {
