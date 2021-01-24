@@ -91,10 +91,10 @@ app.post("/review", (req, respond) => {
                 console.log("잘못된 데이터 입니다.");
                 return null
             } else {
-                var num = $("span.reviews-count").text();
+                var num = getNum(res);
                 var numElem = $("li.review").length;
                 console.log("nubmer: ", numElem);
-                return Math.ceil(Number(num.replace(/,/g, "")) / numElem);
+                return Math.ceil(Number(num) / numElem);
             }
         })
         .then(res => {
@@ -220,6 +220,23 @@ function getReviewData(link, num, resolve) {
             return resolve(res);
         })
         .catch(err => console.log("error: ", err));
+}
+
+function getNum(res) {
+    const $ = cheerio.load(res);
+    var num = $("span.reviews-count").text().replace(/,/g, "");
+    if (num != "") {
+        return num;
+    } else {
+        var summary = $("div.product_summary__item");
+        summary.each((index, item) => {
+            let label = $(item).find("div.product_summary__label")[0].children[0].data;
+            if (label == "리뷰") {
+                num = $(item).find("div.product_summary__count")[0].children[0].data;
+            }
+        })
+        return num;
+    }
 }
 
 function getContent(item) {
