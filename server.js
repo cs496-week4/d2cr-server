@@ -99,44 +99,45 @@ app.get('/morpheme/:pageId', (req, res) => {
                         mongoose.connection.close();
                     }
                 })
-                .catch(err => console.error(`잘못된 페이지 아이디(${pageId})입니다.`));
+                .catch(err => console.error(`잘못된 페이지 아이디(${pageId})입니다: ${err}`));
         });
 });
 
 // 사이트 크롤링 요청 서버사이드
-app.post("/review", (req, respond) => {
+app.post("/review", (req, res) => {
     let data = req.body;
     // console.log(req)
     let url = data.url;
     // data processing
     console.log("신호를 받음");
     request(url)
-        .then(res => {
-            let $ = cheerio.load(res);
+        .then(result => {
+            let $ = cheerio.load(result);
             if ($("li.review").html() == null) {
                 console.log("잘못된 데이터 입니다.");
                 return null
             } else {
-                let num = getNum(res);
+                let num = getNum(result);
                 let numElem = $("li.review").length;
                 console.log("nubmer: ", numElem);
                 return Math.ceil(Number(num) / numElem);
             }
         })
-        .then(res => {
-            console.log(res);
-            if (res == null) {
-                respond.status(202);
-                respond.send("Hello");
-                respond.end();
+        .then(result => {
+            console.log(result);
+            if (result == null) {
+                res.status(202);
+                res.send("Hello");
+                res.end();
             } else {
-                let requests = Array.from(Array(res), (_, i) => i + 1);
+                let requests = Array.from(Array(result), (_, i) => i + 1);
                 return Promise.map(requests, (request) => {
                     return new Promise(resolve => getReviewData(url, request, resolve));
                 }, { concurrency: Number(process.env.CONCUR_CONSTANT) })
                     .then(results => results.flatMap(result => result))
                     .then(results => {
                         // store in data base
+                        console.log(results);
                         return connectDB("Users")
                             .then(_ => {
                                 let data = new Page({
@@ -150,8 +151,8 @@ app.post("/review", (req, respond) => {
                                     .then(result => result.id)
                                     .then(id => {
                                         mongoose.connection.close();
-                                        respond.send(id);
-                                        respond.end();
+                                        res.send(id);
+                                        res.end();
                                     })
                             })
                     })
@@ -198,47 +199,65 @@ app.post("/page/:pageId/:offset", (req, res) => {
 app.get("/monthly/:pageId", (req, res) => {
     console.log("월별데이터 분석 요청이 들어왔습니다.");
     const pageId = req.params.pageId;
+    let update = null;
     connectDB("Users")
         .then(_ => {
             Page.findById(pageId)
                 .then(result => {
-                    // 날짜관련 정보가 없는 경우
-                    if (!result.reviews[0].date) {
-                        console.log("날짜관련데이터가 없습니다.");
-                        let cloneData = { ...monthlyDataFormat };
-                        for (datum of result.reviews) {
-                            cloneData[Number(datum.rate)]++;
-                        }
-                        return [cloneData];
+                    if (result.monthlyRate.length === 0) {
+                        update = monthlyDataParse(result);
+                        return update;
                     } else {
-                        let monthlyDataMap = new Map();
-                        for (datum of result.reviews) {
-                            let monthlyKey = datum.date.split(".").slice(0, 2).join(".");
-                            let monthlyData = monthlyDataMap.get(monthlyKey);
-                            if (monthlyData == null) {
-                                // 새로운 key-value를 만들어서 push
-                                let cloneData = { ...monthlyDataFormat };
-                                cloneData.date = monthlyKey;
-                                monthlyDataMap.set(monthlyKey, cloneData);
-                                monthlyData = cloneData;
-                            }
-                            // point에 맞는 점수 count 추가
-                            monthlyData[Number(datum.rate)]++;
-                        }
-                        // 날짜순으로 정렬
-                        return lodash
-                            .sortBy(Array.from(monthlyDataMap.values()), "date");
+                        return result.monthlyRate;
                     }
                 })
                 .then(result => {
                     res.send(result);
                     res.end();
+                    if (update) {
+                        Page.findByIdAndUpdate(pageId, { monthlyRate: result }, () => {
+                            console.log("업데이트");
+                            mongoose.connection.close();
+                        });
+                    } else {
+                        mongoose.connection.close();
+                    }
                 })
                 .catch(err => console.log(`잘못된 페이지 아이디(${pageId})입니다: ${err}`));
         });
 })
 
 app.listen(3000);
+
+function monthlyDataParse(result) {
+    // 날짜관련 정보가 없는 경우
+    if (!result.reviews[0].date) {
+        console.log("날짜관련데이터가 없습니다.");
+        let cloneData = { ...monthlyDataFormat };
+        for (datum of result.reviews) {
+            cloneData[Number(datum.rate)]++;
+        }
+        return [cloneData];
+    } else {
+        let monthlyDataMap = new Map();
+        for (datum of result.reviews) {
+            let monthlyKey = datum.date.split(".").slice(0, 2).join(".");
+            let monthlyData = monthlyDataMap.get(monthlyKey);
+            if (monthlyData == null) {
+                // 새로운 key-value를 만들어서 push
+                let cloneData = { ...monthlyDataFormat };
+                cloneData.date = monthlyKey;
+                monthlyDataMap.set(monthlyKey, cloneData);
+                monthlyData = cloneData;
+            }
+            // point에 맞는 점수 count 추가
+            monthlyData[Number(datum.rate)]++;
+        }
+        // 날짜순으로 정렬
+        return lodash
+            .sortBy(Array.from(monthlyDataMap.values()), "date");
+    }
+}
 
 function setCurReview(data, rateFilter, sorter, sorterDir, search) {
     console.log("현재 리뷰 업데이트");
@@ -330,7 +349,7 @@ function getUser(item, info) {
     } else {
         let temp2 = item.find("div.review_list__author")[0];
         if (temp2 != undefined) {
-            return temp2;
+            return temp2.children[0].data.trim();
         } else {
             return null;
         }
