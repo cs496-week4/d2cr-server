@@ -24,11 +24,39 @@ const Page = mongoose.model("page", UserSchema);
 app.use(cors());
 app.use(bodyParser.json());
 
+// 테스트용 서버사이드
 app.get('/hello', (req, res) => {
     res.send("hello");
     res.end();
 });
 
+// 크롤링 테스트용 서버사이드
+app.get("/results", (req, respond) => {
+    let link = "https://review4.cre.ma/xexymix.com/products/reviews?app=0&atarget=reviews&iframe=1&iframe_id=crema-product-reviews-1&infinite_scroll=1&nonmember_token=&page=500&parent_url=https%3A%2F%2Fwww.xexymix.com%2Fshop%2Fshopdetail.html%3Fbranduid%3D2060466%26xcode%3D005%26mcode%3D002%26scode%3D%26special%3D1%26GfDT%3DbG53Vg%253D%253D&product_code=2060466&secure_device_token=V2fdbc5442798f5a6c1996e7785c5182001e021480b40b74f7a45e2a08d919f7ef&widget_env=100&widget_style="
+    request(link)
+        .then(res => {
+            var $ = cheerio.load(res);
+            var num = getNum(res);
+            var numElem = $("li.review").length;
+            console.log("nubmer: ", numElem);
+            return Math.ceil(Number(num) / numElem);
+        })
+        .then(res => {
+            console.log(res);
+            let requests = Array.from(Array(res), (_, i) => i);
+            Promise.map(requests, (request) => {
+                return new Promise(resolve => getReviewData(link, request, resolve));
+            }, { concurrency: 10 })
+                .then(results => results.flatMap(result => result))
+                .then(results => {
+                    respond.json(results);
+                    respond.end();
+                });
+        })
+        .catch(err => console.log("request error: ", err));
+});
+
+// 형태소 분석 리퀘스트 서버사이드
 app.get('/morpheme/:pageId', (req, res) => {
     console.log("형태소 분석 요청이 들어왔습니다.");
     const pageId = req.params.pageId;
@@ -69,31 +97,7 @@ app.get('/morpheme/:pageId', (req, res) => {
         })
 });
 
-app.get("/results", (req, respond) => {
-    let link = "https://review4.cre.ma/xexymix.com/products/reviews?app=0&atarget=reviews&iframe=1&iframe_id=crema-product-reviews-1&infinite_scroll=1&nonmember_token=&page=500&parent_url=https%3A%2F%2Fwww.xexymix.com%2Fshop%2Fshopdetail.html%3Fbranduid%3D2060466%26xcode%3D005%26mcode%3D002%26scode%3D%26special%3D1%26GfDT%3DbG53Vg%253D%253D&product_code=2060466&secure_device_token=V2fdbc5442798f5a6c1996e7785c5182001e021480b40b74f7a45e2a08d919f7ef&widget_env=100&widget_style="
-    request(link)
-        .then(res => {
-            var $ = cheerio.load(res);
-            var num = getNum(res);
-            var numElem = $("li.review").length;
-            console.log("nubmer: ", numElem);
-            return Math.ceil(Number(num) / numElem);
-        })
-        .then(res => {
-            console.log(res);
-            let requests = Array.from(Array(res), (_, i) => i);
-            Promise.map(requests, (request) => {
-                return new Promise(resolve => getReviewData(link, request, resolve));
-            }, { concurrency: 10 })
-                .then(results => results.flatMap(result => result))
-                .then(results => {
-                    respond.json(results);
-                    respond.end();
-                });
-        })
-        .catch(err => console.log("request error: ", err));
-});
-
+// 사이트 크롤링 요청 서버사이드
 app.post("/review", (req, respond) => {
     let data = req.body;
     // console.log(req)
@@ -150,6 +154,7 @@ app.post("/review", (req, respond) => {
         .catch(err => console.log("request error: ", err));
 });
 
+// 데이터 필터링 서버사이드
 app.post("/page/:pageId/:offset", (req, res) => {
     console.log(req.params.pageId);
     let data = req.body;
