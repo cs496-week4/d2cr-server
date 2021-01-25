@@ -31,23 +31,40 @@ app.get('/hello', (req, res) => {
 
 app.get('/morpheme/:pageId', (req, res) => {
     console.log("형태소 분석 요청이 들어왔습니다.");
+    const pageId = req.params.pageId;
+    let update = null;
     connectDB("Users")
         .then(_ => {
-            Page.findById(req.params.pageId)
-                .then(result => {
+            Page.findById(pageId)
+                .then(async result => {
                     let reviews = result.reviews;
                     let data = reviews.map(elem => elem.content).join(".")
-                    mongoose.connection.close();
-                    console.log(data.length);
-                    // data가 10000자 이상일 경우 잘라서 보내기
-                    if (data.length > 10000) {
-                        data = data.slice(0, 10000);
+                    // wordCloud 데이터가 없을경우
+                    if (result.wordCloud.length === 0) {
+                        // data가 10000자 이상일 경우 잘라서 보내기
+                        console.log(data.length);
+                        if (data.length > 10000) {
+                            data = data.slice(0, 10000);
+                        }
+                        let temp = await getKeywordData(data);
+                        update = filterPredicate(temp);
+                        return update;
+                    } else {
+                        return result.wordCloud;
                     }
-                    return getKeywordData(data);
                 })
                 .then(result => {
-                    res.json(filterPredicate(result));
+                    res.json(result);
                     res.end();
+                    // 데이터 베이스 업데이트
+                    if (update) {
+                        Page.findByIdAndUpdate(pageId, { wordCloud: result }, () => {
+                            console.log("업데이트");
+                            mongoose.connection.close();
+                        });
+                    } else {
+                        mongoose.connection.close();
+                    }
                 })
         })
 });
