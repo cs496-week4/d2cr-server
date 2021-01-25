@@ -94,7 +94,8 @@ app.get('/morpheme/:pageId', (req, res) => {
                         mongoose.connection.close();
                     }
                 })
-        })
+                .catch(_ => console.err(`잘못된 페이지 아이디(${paegId})입니다.`));
+        });
 });
 
 // 사이트 크롤링 요청 서버사이드
@@ -187,6 +188,62 @@ app.post("/page/:pageId/:offset", (req, res) => {
                 });
         });
 });
+
+//  월별 데이터 분석 서버사이드
+app.get("/monthly/:pageId", (req, res) => {
+    console.log("월별데이터 분석 요청이 들어왔습니다.");
+    const pageId = req.params.pageId;
+    connectDB("Users")
+        .then(_ => {
+            Page.findById(pageId)
+                .then(result => {
+                    // 날짜관련 정보가 없는 경우
+                    if (!result.reviews[0].date) {
+                        console.log("날짜관련데이터가 없습니다.");
+                        let newData = {
+                            "1": 0,
+                            "2": 0,
+                            "3": 0,
+                            "4": 0,
+                            "5": 0
+                        }
+                        for (datum of result.reviews) {
+                            newData[Number(datum.rate)]++;
+                        }
+                        return [newData];
+                    } else {
+                        let monthlyDataMap = new Map();
+                        for (datum of result.reviews) {
+                            let monthlyKey = datum.date.split(".").slice(0, 2).join(".");
+                            let monthlyData = monthlyDataMap.get(monthlyKey);
+                            if (monthlyData == null) {
+                                // 새로운 key-value를 만들어서 push
+                                let newData = {
+                                    "1": 0,
+                                    "2": 0,
+                                    "3": 0,
+                                    "4": 0,
+                                    "5": 0,
+                                    date: monthlyKey
+                                }
+                                monthlyDataMap.set(monthlyKey, newData);
+                                monthlyData = newData;
+                            }
+                            // point에 맞는 점수 count 추가
+                            let origin = monthlyData[Number(datum.rate)];
+                            monthlyData[Number(datum.rate)] = origin + 1
+                        }
+                        return lodash
+                            .sortBy(Array.from(monthlyDataMap.values()), "date");
+                    }
+                })
+                .then(result => {
+                    res.send(result);
+                    res.end();
+                })
+                .catch(err => console.log(`잘못된 페이지 아이디(${pageId})입니다.`, err));
+        });
+})
 
 app.listen(3000);
 
