@@ -1,24 +1,29 @@
+const dotenv = require('dotenv'); // .evn 파일 로드
 const request = require("request-promise-native");
-const WRITTEN = "WiseNLU";
-const SPOKEN = "WiseNLU_spoken";
-const ACCESS_KEY = "70b52a94-fe12-4b15-94b4-cfa628e82799";
-let openApiURL = "http://aiopen.etri.re.kr:8000/" + SPOKEN;
-let analysisCode = 'ner';
+dotenv.config()
+
 
 const getKeywordData = async (text) => {
-    let requestJson = {
-        'access_key': ACCESS_KEY,
+    // data가 max를 넘길경우 이상일 경우 잘라서 보내기
+    if (text.length > Number(process.env.MAX_LENGTH)) {
+        text = data.slice(0, Number(process.env.MAX_LENGTH));
+    }
+    // 헤더 설정
+    const requestJson = {
+        'access_key': process.env.ACCESS_KEY,
         'argument': {
             'text': text,
-            'analysis_code': analysisCode
+            'analysis_code': process.env.ANALYSIS_CODE
         }
     };
+    const openApiURL = process.env.OPEN_URL + process.env.SPOKEN;
     // Request Body
-    let options = {
+    const options = {
         url: openApiURL,
         body: JSON.stringify(requestJson),
         headers: { 'Content-Type': 'application/json; charset=UTF-8' }
     };
+
     return request.post(options)
         .then(body => JSON.parse(body).return_object.sentence)
         .then(sentences => {
@@ -52,13 +57,14 @@ const getKeywordData = async (text) => {
                     }
                 }
             }
-            // 빈도순으로 정렬
+            // 형태소 빈도순으로 정렬
             if (0 < morphemesMap.size) {
                 morphemes = Array.from(morphemesMap.values());
                 morphemes.sort((morpheme1, morpheme2) => {
                     return morpheme2.count - morpheme1.count;
                 });
             }
+            // 단어 빈도순으로 정렬
             if (0 < nameEntitiesMap.size) {
                 nameEntities = Array.from(nameEntitiesMap.values());
                 nameEntities.sort((nameEntity1, nameEntity2) => {
@@ -66,7 +72,8 @@ const getKeywordData = async (text) => {
                 });
             }
             return morphemes;
-        });
+        })
+        .catch(err => console.error(`형태소 분석에 실패하였습니다: ${err}`));
 }
 
 const filterPredicate = (morphemes) => {

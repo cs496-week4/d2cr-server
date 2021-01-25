@@ -1,9 +1,9 @@
-const express = require('express');
-const app = express();
-const request = require("request-promise-native");
-const cheerio = require("cheerio");
-const Promise = require("bluebird");
+const dotenv = require('dotenv'); // .evn 파일 로드
+const express = require('express'); const app = express();
 const bodyParser = require('body-parser');
+const request = require("request-promise-native"); // request를 promise로 변환
+const cheerio = require("cheerio");
+const Promise = require("bluebird"); // 프로미스 리스트를 기다림 + 동시적인 처리
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
@@ -11,7 +11,14 @@ const etri = require("./etri");
 const { getKeywordData, filterPredicate, filterNoun } = etri;
 
 const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
-const CONCUR_CONSTANT = 10;
+const monthlyDataFormat = {
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 0,
+    "5": 0,
+    date: null
+};
 const UserSchema = new mongoose.Schema({
     reviews: Array,
     curReviews: Array,
@@ -21,8 +28,11 @@ const UserSchema = new mongoose.Schema({
 })
 const Page = mongoose.model("page", UserSchema);
 
+dotenv.config()
 app.use(cors());
 app.use(bodyParser.json());
+
+// console.log(typeof process.env.CONCUR_CONSTANT);
 
 // 테스트용 서버사이드
 app.get('/hello', (req, res) => {
@@ -69,11 +79,6 @@ app.get('/morpheme/:pageId', (req, res) => {
                     let data = reviews.map(elem => elem.content).join(".")
                     // wordCloud 데이터가 없을경우
                     if (result.wordCloud.length === 0) {
-                        // data가 10000자 이상일 경우 잘라서 보내기
-                        console.log(data.length);
-                        if (data.length > 10000) {
-                            data = data.slice(0, 10000);
-                        }
                         let temp = await getKeywordData(data);
                         update = filterPredicate(temp);
                         return update;
@@ -94,7 +99,7 @@ app.get('/morpheme/:pageId', (req, res) => {
                         mongoose.connection.close();
                     }
                 })
-                .catch(_ => console.err(`잘못된 페이지 아이디(${paegId})입니다.`));
+                .catch(err => console.error(`잘못된 페이지 아이디(${pageId})입니다.`));
         });
 });
 
@@ -107,13 +112,13 @@ app.post("/review", (req, respond) => {
     console.log("신호를 받음");
     request(url)
         .then(res => {
-            var $ = cheerio.load(res);
+            let $ = cheerio.load(res);
             if ($("li.review").html() == null) {
                 console.log("잘못된 데이터 입니다.");
                 return null
             } else {
-                var num = getNum(res);
-                var numElem = $("li.review").length;
+                let num = getNum(res);
+                let numElem = $("li.review").length;
                 console.log("nubmer: ", numElem);
                 return Math.ceil(Number(num) / numElem);
             }
@@ -128,7 +133,7 @@ app.post("/review", (req, respond) => {
                 let requests = Array.from(Array(res), (_, i) => i + 1);
                 return Promise.map(requests, (request) => {
                     return new Promise(resolve => getReviewData(url, request, resolve));
-                }, { concurrency: CONCUR_CONSTANT })
+                }, { concurrency: Number(process.env.CONCUR_CONSTANT) })
                     .then(results => results.flatMap(result => result))
                     .then(results => {
                         // store in data base
@@ -183,7 +188,7 @@ app.post("/page/:pageId/:offset", (req, res) => {
                 .then(result => {
                     let offset = Number(req.params.offset);
                     console.log("끝끝끝끝");
-                    res.send(result.slice(offset, offset + 15));
+                    res.send(result.slice(offset, offset + Number(process.env.OFFSET)));
                     res.end();
                 });
         });
@@ -200,17 +205,11 @@ app.get("/monthly/:pageId", (req, res) => {
                     // 날짜관련 정보가 없는 경우
                     if (!result.reviews[0].date) {
                         console.log("날짜관련데이터가 없습니다.");
-                        let newData = {
-                            "1": 0,
-                            "2": 0,
-                            "3": 0,
-                            "4": 0,
-                            "5": 0
-                        }
+                        let cloneData = { ...monthlyDataFormat };
                         for (datum of result.reviews) {
-                            newData[Number(datum.rate)]++;
+                            cloneData[Number(datum.rate)]++;
                         }
-                        return [newData];
+                        return [cloneData];
                     } else {
                         let monthlyDataMap = new Map();
                         for (datum of result.reviews) {
@@ -218,21 +217,15 @@ app.get("/monthly/:pageId", (req, res) => {
                             let monthlyData = monthlyDataMap.get(monthlyKey);
                             if (monthlyData == null) {
                                 // 새로운 key-value를 만들어서 push
-                                let newData = {
-                                    "1": 0,
-                                    "2": 0,
-                                    "3": 0,
-                                    "4": 0,
-                                    "5": 0,
-                                    date: monthlyKey
-                                }
-                                monthlyDataMap.set(monthlyKey, newData);
-                                monthlyData = newData;
+                                let cloneData = { ...monthlyDataFormat };
+                                cloneData.date = monthlyKey;
+                                monthlyDataMap.set(monthlyKey, cloneData);
+                                monthlyData = cloneData;
                             }
                             // point에 맞는 점수 count 추가
-                            let origin = monthlyData[Number(datum.rate)];
-                            monthlyData[Number(datum.rate)] = origin + 1
+                            monthlyData[Number(datum.rate)]++;
                         }
+                        // 날짜순으로 정렬
                         return lodash
                             .sortBy(Array.from(monthlyDataMap.values()), "date");
                     }
@@ -241,7 +234,7 @@ app.get("/monthly/:pageId", (req, res) => {
                     res.send(result);
                     res.end();
                 })
-                .catch(err => console.log(`잘못된 페이지 아이디(${pageId})입니다.`, err));
+                .catch(err => console.log(`잘못된 페이지 아이디(${pageId})입니다: ${err}`));
         });
 })
 
