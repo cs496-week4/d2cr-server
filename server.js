@@ -7,20 +7,11 @@ const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
+const etri = require("./etri");
+const { getKeywordData, filterPredicate, filterNoun } = etri;
+
 const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
-
-
-
 const CONCUR_CONSTANT = 10;
-
-const ReviewSchema = new mongoose.Schema({
-    content: String,
-    point: Number,
-    pointWord: String,
-    user: String,
-    date: String
-})
-
 const UserSchema = new mongoose.Schema({
     reviews: Array,
     curReviews: Array,
@@ -28,7 +19,6 @@ const UserSchema = new mongoose.Schema({
     wordCloud: Array,
     monthlyRate: Array
 })
-
 const Page = mongoose.model("page", UserSchema);
 
 app.use(cors());
@@ -39,8 +29,8 @@ app.get('/hello', (req, res) => {
     res.end();
 });
 
-
 app.get('/morpheme/:pageId', (req, res) => {
+    console.log("형태소 분석 요청이 들어왔습니다.");
     connectDB("Users")
         .then(_ => {
             Page.findById(req.params.pageId)
@@ -48,24 +38,33 @@ app.get('/morpheme/:pageId', (req, res) => {
                     let reviews = result.reviews;
                     let data = reviews.map(elem => elem.content).join(".")
                     mongoose.connection.close();
-                    res.send(data);
+                    console.log(data.length);
+                    // data가 10000자 이상일 경우 잘라서 보내기
+                    if (data.length > 10000) {
+                        data = data.slice(0, 10000);
+                    }
+                    return getKeywordData(data);
+                })
+                .then(result => {
+                    res.json(filterPredicate(result));
                     res.end();
                 })
         })
 });
 
 app.get("/results", (req, respond) => {
-    let link = "http://review5.cre.ma/thedaze.kr/mobile/products/reviews?app=0&device=mobile&iframe=1&iframe_id=crema-product-reviews-1&nonmember_token=&page=4&parent_url=http%3A%2F%2Fm.dejou.co.kr%2Fproduct%2Fdetail.html%3Fproduct_no%3D13175%26cate_no%3D41%26display_group%3D2%26crema-product-reviews-1-page%3D2%26crema-product-reviews-1-sort%3D30&product_code=13175&secure_device_token=V28cc48267afa62871f258cc4edf8004f407108f4ee3c41ede39c508336c49606e&sort=30&widget_env=100&widget_id=17&widget_style="
+    let link = "https://review4.cre.ma/xexymix.com/products/reviews?app=0&atarget=reviews&iframe=1&iframe_id=crema-product-reviews-1&infinite_scroll=1&nonmember_token=&page=500&parent_url=https%3A%2F%2Fwww.xexymix.com%2Fshop%2Fshopdetail.html%3Fbranduid%3D2060466%26xcode%3D005%26mcode%3D002%26scode%3D%26special%3D1%26GfDT%3DbG53Vg%253D%253D&product_code=2060466&secure_device_token=V2fdbc5442798f5a6c1996e7785c5182001e021480b40b74f7a45e2a08d919f7ef&widget_env=100&widget_style="
     request(link)
         .then(res => {
             var $ = cheerio.load(res);
-            var num = $("span.reviews-count").text();
+            var num = getNum(res);
             var numElem = $("li.review").length;
-            return Math.ceil(Number(num.replace(/,/g, "")) / numElem);
+            console.log("nubmer: ", numElem);
+            return Math.ceil(Number(num) / numElem);
         })
         .then(res => {
             console.log(res);
-            let requests = Array.from(Array(10), (_, i) => i);
+            let requests = Array.from(Array(res), (_, i) => i);
             Promise.map(requests, (request) => {
                 return new Promise(resolve => getReviewData(link, request, resolve));
             }, { concurrency: 10 })
@@ -134,8 +133,6 @@ app.post("/review", (req, respond) => {
         .catch(err => console.log("request error: ", err));
 });
 
-// page/word-cloud/:wordCloud
-// page/monthly-rate/:pageId
 app.post("/page/:pageId/:offset", (req, res) => {
     console.log(req.params.pageId);
     let data = req.body;
@@ -255,7 +252,17 @@ function getRate(item) {
 
 function getUser(item, info) {
     let temp1 = info.find(i => i.includes("*"));
-    return (temp1 != undefined) ? temp1 : item.find("div.review_list__author")[0].children[0].data.trim();
+    // console.log(temp1);
+    if (temp1 != undefined) {
+        return temp1;
+    } else {
+        let temp2 = item.find("div.review_list__author")[0];
+        if (temp2 != undefined) {
+            return temp2;
+        } else {
+            return null;
+        }
+    }
 }
 
 function connectDB(dataBase) {
