@@ -132,7 +132,8 @@ app.post("/review", (req, res) => {
                 let num = getNum(result);
                 let numElem = $("li.review").length;
                 console.log("nubmer: ", numElem);
-                return Math.ceil(Number(num) / numElem);
+                // return Math.ceil(Number(num) / numElem);
+                return [Number(num), numElem];
             }
         })
         .then(result => {
@@ -144,9 +145,10 @@ app.post("/review", (req, res) => {
                 // 무한스크롤 데이터일경우
             } else if (checkInfiniteScroll(url)) {
                 console.log("무한 스크롤 크롤링을 진행합니다.");
-                return scrapInfinite(url, 40);
+                return scrapInfinite(url, result[0]);
             } else {
-                let requests = Array.from(Array(result), (_, i) => i + 1);
+                let num = Math.ceil(result[0] / result[1]);
+                let requests = Array.from(Array(num), (_, i) => i + 1);
                 return Promise.map(requests, (request) => {
                     return new Promise(resolve => getReviewData(url, request, resolve));
                 }, { concurrency: Number(process.env.CONCUR_CONSTANT) })
