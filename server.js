@@ -123,9 +123,10 @@ app.get('/morpheme/:pageId', (req, res) => {
                             console.log("업데이트");
                             //mongoose.connection.close();
                         });
-                    } else {
-                        // mongoose.connection.close();
                     }
+                    // else {
+                    //     // mongoose.connection.close();
+                    // }
                 })
                 .catch(err => console.error(`etri api error: ${err}`));
         })
@@ -165,11 +166,13 @@ app.post("/review", (req, res) => {
                 let num = Math.ceil(result[0] / result[1]);
                 let requests = Array.from(Array(num), (_, i) => i + 1);
                 return Promise
-                    .map(requests, (request) => {
-                        return new Promise(resolve => getReviewData(url, request, resolve));
-                    }, {
-                        concurrency: Number(process.env.CONCUR_CONSTANT)
-                    })
+                    .map(requests,
+                        (request) => {
+                            return new Promise(resolve => getReviewData(url, request, resolve));
+                        },
+                        {
+                            concurrency: Number(process.env.CONCUR_CONSTANT)
+                        })
                     .then(results => results.flatMap(result => result))
                     .catch(err => console.error(`scrap error: ${err}`))
             }
