@@ -7,8 +7,8 @@ const Promise = require("bluebird"); // 프로미스 리스트를 기다림 + �
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
-const etri = require("./etri");
-const { getKeywordData, filterPredicate, filterNoun } = etri;
+const { getKeywordData, filterPredicate } = require("./etri");
+const { scrapInfinite } = require("./scrape-infinite-scroll");
 
 const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
 const monthlyDataFormat = {
@@ -28,14 +28,13 @@ const UserSchema = new mongoose.Schema({
 })
 const Page = mongoose.model("page", UserSchema);
 
-dotenv.config()
+dotenv.config();
 app.use(cors());
 app.use(bodyParser.json());
 
-// console.log(typeof process.env.CONCUR_CONSTANT);
-
 // 테스트용 서버사이드
 app.get('/hello', (req, res) => {
+    console.log("연결되었습니다.");
     res.send("hello");
     res.end();
 });
@@ -66,6 +65,19 @@ app.get("/results", (req, respond) => {
         .catch(err => console.log("request error: ", err));
 });
 
+// 유효한 url체크 서버사이드
+app.post("/check", (req, res) => {
+    console.log("url 유효성 검사를 합니다.");
+    let data = req.body;
+    let url = data.url;
+    if (checkUrl(url)) {
+        res.status(200);
+    } else {
+        res.status(400);
+    }
+    res.end();
+});
+
 // 형태소 분석 리퀘스트 서버사이드
 app.get('/morpheme/:pageId', (req, res) => {
     console.log("형태소 분석 요청이 들어왔습니다.");
@@ -76,9 +88,9 @@ app.get('/morpheme/:pageId', (req, res) => {
             Page.findById(pageId)
                 .then(async result => {
                     let reviews = result.reviews;
-                    let data = reviews.map(elem => elem.content).join(".")
                     // wordCloud 데이터가 없을경우
                     if (result.wordCloud.length === 0) {
+                        let data = reviews.map(elem => elem.content).join(".");
                         let temp = await getKeywordData(data);
                         update = filterPredicate(temp);
                         return update;
@@ -93,20 +105,20 @@ app.get('/morpheme/:pageId', (req, res) => {
                     if (update) {
                         Page.findByIdAndUpdate(pageId, { wordCloud: result }, () => {
                             console.log("업데이트");
-                            mongoose.connection.close();
+                            //mongoose.connection.close();
                         });
                     } else {
                         mongoose.connection.close();
                     }
                 })
-                .catch(err => console.error(`잘못된 페이지 아이디(${pageId})입니다: ${err}`));
-        });
+                .catch(err => console.error(`etri api error: ${err}`));
+        })
+        .catch(err => console.error(`connection error: ${err}`));
 });
 
 // 사이트 크롤링 요청 서버사이드
 app.post("/review", (req, res) => {
     let data = req.body;
-    // console.log(req)
     let url = data.url;
     // data processing
     console.log("신호를 받음");
@@ -126,57 +138,61 @@ app.post("/review", (req, res) => {
         .then(result => {
             console.log(result);
             if (result == null) {
-                res.status(202);
+                res.status(400);
                 res.send("Hello");
                 res.end();
+                // 무한스크롤 데이터일경우
+            } else if (checkInfiniteScroll(url)) {
+                console.log("무한 스크롤 크롤링을 진행합니다.");
+                return scrapInfinite(url, 40);
             } else {
                 let requests = Array.from(Array(result), (_, i) => i + 1);
                 return Promise.map(requests, (request) => {
                     return new Promise(resolve => getReviewData(url, request, resolve));
                 }, { concurrency: Number(process.env.CONCUR_CONSTANT) })
                     .then(results => results.flatMap(result => result))
-                    .then(results => {
-                        // store in data base
-                        console.log(results);
-                        return connectDB("Users")
-                            .then(_ => {
-                                let data = new Page({
-                                    reviews: results,
-                                    curReviews: results,
-                                    curQueries: "",
-                                    wordCloud: [],
-                                    monthlyRate: []
-                                });
-                                return data.save()
-                                    .then(result => result.id)
-                                    .then(id => {
-                                        mongoose.connection.close();
-                                        res.send(id);
-                                        res.end();
-                                    })
-                            })
-                    })
+                    .catch(err => console.error(`scrap error: ${err}`))
             }
         })
-        .catch(err => console.log("request error: ", err));
+        .then(results => {
+            // store in data base
+            return connectDB("Users")
+                .then(_ => {
+                    let data = new Page({
+                        reviews: results,
+                        curReviews: results,
+                        curQueries: "",
+                        wordCloud: [],
+                        monthlyRate: []
+                    });
+                    return data.save()
+                        .then(result => result.id)
+                        .then(id => {
+                            mongoose.connection.close();
+                            res.send(id);
+                            res.end();
+                        })
+                })
+                .catch(err => console.error(`data base connection error: ${err}`));
+        })
+        .catch(err => console.error(`request error: ${err}`));
 });
 
 // 데이터 필터링 서버사이드
 app.post("/page/:pageId/:offset", (req, res) => {
     console.log(req.params.pageId);
     let data = req.body;
-    console.log(data);
+    // console.log(data);
     connectDB("Users")
         .then(_ => {
             Page.findById(req.params.pageId)
                 .then(result => {
                     let queries = getQueries(data)
+                    // console.log(result.curQueries);
                     console.log(queries);
-                    console.log(result.curQueries);
                     if (result.curQueries !== queries) {
                         console.log("쿼리가 다릅니다.");
                         let curReviews = setCurReview(result.reviews, data.rateFilter, data.sorter, data.sorterDir, data.search);
-                        result.curReviews = curReviews;
                         Page.findByIdAndUpdate(req.params.pageId, { curQueries: queries, curReviews: curReviews }, () => {
                             console.log("업데이트");
                             mongoose.connection.close();
@@ -187,12 +203,15 @@ app.post("/page/:pageId/:offset", (req, res) => {
                     }
                 })
                 .then(result => {
+                    // console.log(req.params.offset);
                     let offset = Number(req.params.offset);
-                    console.log("끝끝끝끝");
+                    console.log("fetch end");
                     res.send(result.slice(offset, offset + Number(process.env.OFFSET)));
                     res.end();
-                });
-        });
+                })
+                .catch(err => console.error(`fetch error: ${err}`));
+        })
+        .catch(err => console.error(`data base connection error: ${err}`));
 });
 
 //  월별 데이터 분석 서버사이드
@@ -217,7 +236,7 @@ app.get("/monthly/:pageId", (req, res) => {
                     if (update) {
                         Page.findByIdAndUpdate(pageId, { monthlyRate: result }, () => {
                             console.log("업데이트");
-                            mongoose.connection.close();
+                            //mongoose.connection.close();
                         });
                     } else {
                         mongoose.connection.close();
@@ -229,7 +248,26 @@ app.get("/monthly/:pageId", (req, res) => {
 
 app.listen(3000);
 
-function monthlyDataParse(result) {
+const checkUrl = (url) => {
+    if (url.includes("review") &&
+        url.includes("cre.ma") &&
+        url.includes("products") &&
+        url.includes("crema-product-reviews")) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+const checkInfiniteScroll = (url) => {
+    if (url.includes("infinite_scroll=")) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+const monthlyDataParse = (result) => {
     // 날짜관련 정보가 없는 경우
     if (!result.reviews[0].date) {
         console.log("날짜관련데이터가 없습니다.");
@@ -241,17 +279,20 @@ function monthlyDataParse(result) {
     } else {
         let monthlyDataMap = new Map();
         for (datum of result.reviews) {
-            let monthlyKey = datum.date.split(".").slice(0, 2).join(".");
-            let monthlyData = monthlyDataMap.get(monthlyKey);
-            if (monthlyData == null) {
-                // 새로운 key-value를 만들어서 push
-                let cloneData = { ...monthlyDataFormat };
-                cloneData.date = monthlyKey;
-                monthlyDataMap.set(monthlyKey, cloneData);
-                monthlyData = cloneData;
+            if (datum.date.includes("2021") || datum.date.includes("2020")) {
+                let monthlyKey = datum.date.split(".").slice(0, 2).join(".");
+                // 최근 3년치 데이터만 불러오기 2021, 2020
+                let monthlyData = monthlyDataMap.get(monthlyKey);
+                if (monthlyData == null) {
+                    // 새로운 key-value를 만들어서 push
+                    let cloneData = { ...monthlyDataFormat };
+                    cloneData.date = monthlyKey;
+                    monthlyDataMap.set(monthlyKey, cloneData);
+                    monthlyData = cloneData;
+                }
+                // point에 맞는 점수 count 추가
+                monthlyData[Number(datum.rate)]++;
             }
-            // point에 맞는 점수 count 추가
-            monthlyData[Number(datum.rate)]++;
         }
         // 날짜순으로 정렬
         return lodash
@@ -259,8 +300,9 @@ function monthlyDataParse(result) {
     }
 }
 
-function setCurReview(data, rateFilter, sorter, sorterDir, search) {
+const setCurReview = (data, rateFilter, sorter, sorterDir, search) => {
     console.log("현재 리뷰 업데이트");
+    console.log("필터 키워드: ", search);
     // 선택한 평점으로 필터링
     let a = data
         .filter(elem => rateFilter.includes(elem.rate))
@@ -278,12 +320,12 @@ function setCurReview(data, rateFilter, sorter, sorterDir, search) {
     }
 }
 
-function getQueries(data) {
+const getQueries = (data) => {
     data.rateFilter = data.rateFilter.sort();
     return JSON.stringify(data);
 }
 
-function getReviewData(link, num, resolve) {
+const getReviewData = (link, num, resolve) => {
     let url = new URL(link);
     url.searchParams.set("page", num);
     request(url.toString())
@@ -310,7 +352,7 @@ function getReviewData(link, num, resolve) {
         .catch(err => console.log("error: ", err));
 }
 
-function getNum(res) {
+const getNum = (res) => {
     const $ = cheerio.load(res);
     var num = $("span.reviews-count").text().replace(/,/g, "");
     if (num != "") {
@@ -327,11 +369,11 @@ function getNum(res) {
     }
 }
 
-function getContent(item) {
+const getContent = (item) => {
     return item.find("div.js-translate-review-message")[0].children[0].data.trim();
 }
 
-function getRate(item) {
+const getRate = (item) => {
     let temp = item.find("div.products_reviews_list_review__score_text_rating").text().replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
     let rateWord = (temp != '') ? temp : item.find("div.review_list__score_right_item")[0].children[0].data.replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
     let position = rateWordList.indexOf(rateWord);
@@ -341,7 +383,7 @@ function getRate(item) {
         : position + 1;
 }
 
-function getUser(item, info) {
+const getUser = (item, info) => {
     let temp1 = info.find(i => i.includes("*"));
     // console.log(temp1);
     if (temp1 != undefined) {
@@ -356,7 +398,7 @@ function getUser(item, info) {
     }
 }
 
-function connectDB(dataBase) {
+const connectDB = (dataBase) => {
     return mongoose
         .connect("mongodb://127.0.0.1:27017/" + dataBase, {
             useNewUrlParser: true,

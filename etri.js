@@ -6,7 +6,7 @@ dotenv.config()
 const getKeywordData = async (text) => {
     // data가 max를 넘길경우 이상일 경우 잘라서 보내기
     if (text.length > Number(process.env.MAX_LENGTH)) {
-        text = data.slice(0, Number(process.env.MAX_LENGTH));
+        text = text.slice(0, Number(process.env.MAX_LENGTH));
     }
     // 헤더 설정
     const requestJson = {
@@ -86,6 +86,14 @@ const filterNoun = (morphemes) => {
     return morphemes.filter(morpheme => {
         return morpheme.type === "NNG" || morpheme.type === "NNP" || morpheme.type === "NNB";
     });
+}
+
+const analyzeMorpheme = () => {
+
+}
+
+const analyzeWord = () => {
+
 }
 
 module.exports = { getKeywordData, filterPredicate, filterNoun };
