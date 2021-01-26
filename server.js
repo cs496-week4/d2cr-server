@@ -10,6 +10,7 @@ const cors = require('cors');
 const uuid4 = require("uuid4");
 const { getKeywordData, filterPredicate } = require("./etri");
 const { scrapInfinite } = require("./scrape-infinite-scroll");
+const { checkFakeProduct } = require("./checkFake")
 
 const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
 const monthlyDataFormat = {
@@ -67,6 +68,16 @@ app.get("/results", (req, respond) => {
         .catch(err => console.log("request error: ", err));
 });
 
+// 
+app.get("/inspection", (req, res) => {
+    checkFakeProduct()
+        .then(result => {
+            res.send(result);
+            res.end();
+        })
+        .catch();
+});
+
 // 유효한 url체크 서버사이드
 app.post("/check", (req, res) => {
     console.log("url 유효성 검사를 합니다.");
@@ -113,7 +124,7 @@ app.get('/morpheme/:pageId', (req, res) => {
                             //mongoose.connection.close();
                         });
                     } else {
-                        mongoose.connection.close();
+                        // mongoose.connection.close();
                     }
                 })
                 .catch(err => console.error(`etri api error: ${err}`));
@@ -180,7 +191,7 @@ app.post("/review", (req, res) => {
                             .save()
                             .then(result => result.id)
                             .then(id => {
-                                mongoose.connection.close();
+                                // mongoose.connection.close();
                                 res.send(id);
                                 res.end();
                             });
@@ -263,7 +274,7 @@ app.get("/monthly/:pageId", (req, res) => {
                             //mongoose.connection.close();
                         });
                     } else {
-                        mongoose.connection.close();
+                        // mongoose.connection.close();
                     }
                 })
                 .catch(err => console.log(`잘못된 페이지 아이디(${pageId})입니다: ${err}`));
