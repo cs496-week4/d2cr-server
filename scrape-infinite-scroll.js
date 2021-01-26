@@ -1,5 +1,6 @@
 const puppeteer = require("puppeteer");
-const PuppeteerNetworkMonitor = require('./PuppeteerNetworkMonitor')
+const PuppeteerNetworkMonitor = require('./PuppeteerNetworkMonitor');
+const uuid4 = require("uuid4");
 
 function extractItems() {
     const extractedElements = document.querySelectorAll("div.products_reviews_list_review__inner");
@@ -10,7 +11,8 @@ function extractItems() {
             content: element.querySelector("div.review_message").innerText.trim(),
             rate: 5 - element.querySelectorAll("span.star--empty").length,
             user: info[0].innerText,
-            date: info[1].innerText
+            date: info[1].innerText,
+            _id: uuid4()
         });
     }
     return items;
@@ -49,10 +51,12 @@ const scrapInfinite = async (url, itemTargetCount) => {
     // 브라우저 세팅
     const browser = await puppeteer.launch({
         headless: true,
-        args: ["--disable-gpu",
+        args: [
+            "--disable-gpu",
             "--disable-dev-shm-usage",
             "--no-sandbox",
-            "--disable-setuid-sandbox"],
+            "--disable-setuid-sandbox"
+        ],
     });
     // 크롤링을 위한 페이지 클래스를 새로 정의
     const page = await browser.newPage();

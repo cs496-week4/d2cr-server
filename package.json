@@ -24,6 +24,8 @@
     "request": "^2.88.2",
     "request-promise-native": "^1.0.9",
     "sort-json-array": "^0.1.7",
-    "url": "^0.11.0"
+    "url": "^0.11.0",
+    "uuid": "^8.3.2",
+    "uuid4": "^2.0.2"
   }
 }

@@ -7,6 +7,7 @@ const Promise = require("bluebird"); // 프로미스 리스트를 기다림 + �
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
+const uuid4 = require("uuid4");
 const { getKeywordData, filterPredicate } = require("./etri");
 const { scrapInfinite } = require("./scrape-infinite-scroll");
 
@@ -20,6 +21,7 @@ const monthlyDataFormat = {
     date: null
 };
 const UserSchema = new mongoose.Schema({
+    url: String,
     reviews: Array,
     curReviews: Array,
     curQueries: String,
@@ -70,12 +72,15 @@ app.post("/check", (req, res) => {
     console.log("url 유효성 검사를 합니다.");
     let data = req.body;
     let url = data.url;
-    if (checkUrl(url)) {
-        res.status(200);
-    } else {
-        res.status(400);
-    }
-    res.end();
+    checkUrl(url)
+        .then(valid => {
+            if (valid) {
+                res.send("valid");
+            } else {
+                res.send("invalid");
+            }
+            res.end();
+        })
 });
 
 // 형태소 분석 리퀘스트 서버사이드
@@ -120,7 +125,6 @@ app.get('/morpheme/:pageId', (req, res) => {
 app.post("/review", (req, res) => {
     let data = req.body;
     let url = data.url;
-    // data processing
     console.log("신호를 받음");
     request(url)
         .then(result => {
@@ -138,44 +142,55 @@ app.post("/review", (req, res) => {
         })
         .then(result => {
             console.log(result);
+            // case1: 유효하지 않은 웹사이트
             if (result == null) {
-                res.status(400);
-                res.send("Hello");
-                res.end();
-                // 무한스크롤 데이터일경우
+                return null;
+                // case2: 무한 스크롤 웹사이트
             } else if (checkInfiniteScroll(url)) {
                 console.log("무한 스크롤 크롤링을 진행합니다.");
                 return scrapInfinite(url, result[0]);
+                // case3: 가장 일반적인 웹사이트
             } else {
                 let num = Math.ceil(result[0] / result[1]);
                 let requests = Array.from(Array(num), (_, i) => i + 1);
-                return Promise.map(requests, (request) => {
-                    return new Promise(resolve => getReviewData(url, request, resolve));
-                }, { concurrency: Number(process.env.CONCUR_CONSTANT) })
+                return Promise
+                    .map(requests, (request) => {
+                        return new Promise(resolve => getReviewData(url, request, resolve));
+                    }, {
+                        concurrency: Number(process.env.CONCUR_CONSTANT)
+                    })
                     .then(results => results.flatMap(result => result))
                     .catch(err => console.error(`scrap error: ${err}`))
             }
         })
+        // 데이터 베이스 업데이트
         .then(results => {
-            // store in data base
-            return connectDB("Users")
-                .then(_ => {
-                    let data = new Page({
-                        reviews: results,
-                        curReviews: results,
-                        curQueries: "",
-                        wordCloud: [],
-                        monthlyRate: []
-                    });
-                    return data.save()
-                        .then(result => result.id)
-                        .then(id => {
-                            mongoose.connection.close();
-                            res.send(id);
-                            res.end();
-                        })
-                })
-                .catch(err => console.error(`data base connection error: ${err}`));
+            if (results != null) {
+                connectDB("Users")
+                    .then(_ => {
+                        let data = new Page({
+                            url: url,
+                            reviews: results,
+                            curReviews: results,
+                            curQueries: "",
+                            wordCloud: [],
+                            monthlyRate: []
+                        });
+                        data
+                            .save()
+                            .then(result => result.id)
+                            .then(id => {
+                                mongoose.connection.close();
+                                res.send(id);
+                                res.end();
+                            });
+                    })
+                    .catch(err => console.error(`data base connection error: ${err}`));
+            } else {
+                res.status(400);
+                res.send("Hello");
+                res.end();
+            }
         })
         .catch(err => console.error(`request error: ${err}`));
 });
@@ -195,20 +210,27 @@ app.post("/page/:pageId/:offset", (req, res) => {
                     if (result.curQueries !== queries) {
                         console.log("쿼리가 다릅니다.");
                         let curReviews = setCurReview(result.reviews, data.rateFilter, data.sorter, data.sorterDir, data.search);
-                        Page.findByIdAndUpdate(req.params.pageId, { curQueries: queries, curReviews: curReviews }, () => {
+                        return Page.findByIdAndUpdate(req.params.pageId, { curQueries: queries, curReviews: curReviews }, () => {
                             console.log("업데이트");
-                            mongoose.connection.close();
+                            // mongoose.connection.close();
+                            return result;
                         });
-                        return curReviews;
                     } else {
-                        return result.curReviews;
+                        return result;
                     }
                 })
                 .then(result => {
                     // console.log(req.params.offset);
                     let offset = Number(req.params.offset);
                     console.log("fetch end");
-                    res.send(result.slice(offset, offset + Number(process.env.OFFSET)));
+                    let sendData = {
+                        reviews: result.curReviews.slice(offset, offset + Number(process.env.OFFSET)),
+                        reviewCount: result.curReviews.length,
+                        productUrl: result.url,
+                        _id: result._id
+                    }
+                    console.log(sendData.reviews.map(item => item.rate));
+                    res.json(sendData);
                     res.end();
                 })
                 .catch(err => console.error(`fetch error: ${err}`));
@@ -251,14 +273,19 @@ app.get("/monthly/:pageId", (req, res) => {
 app.listen(3000);
 
 const checkUrl = (url) => {
-    if (url.includes("review") &&
-        url.includes("cre.ma") &&
-        url.includes("products") &&
-        url.includes("crema-product-reviews")) {
-        return true;
-    } else {
-        return false;
-    }
+    return request(url)
+        .then(result => {
+            let $ = cheerio.load(result);
+            if ($("li.review").html() == null) {
+                console.log("잘못된 데이터 입니다.");
+                return false;
+            }
+            return true;
+        })
+        .catch(err => {
+            console.error("에러: ", err);
+            return false;
+        })
 }
 
 const checkInfiniteScroll = (url) => {
@@ -304,21 +331,22 @@ const monthlyDataParse = (result) => {
 
 const setCurReview = (data, rateFilter, sorter, sorterDir, search) => {
     console.log("현재 리뷰 업데이트");
-    console.log("필터 키워드: ", search);
+    console.log("필터 키워드: ", rateFilter, typeof rateFilter[0]);
     // 선택한 평점으로 필터링
-    let a = data
-        .filter(elem => rateFilter.includes(elem.rate))
+    let curData = data
+        .filter(elem => rateFilter.includes(Number(elem.rate)))
         .filter(elem => elem.content.includes(search));
     switch (sorterDir) {
         // 오름차순
         case "lower first":
-            return lodash.sortBy(a, sorter);
+            // console.log("lower: " + curData);
+            return lodash.sortBy(curData, sorter);
         // 내림차순
         case "higher first":
-            return lodash.sortBy(a, sorter).reverse();
+            return lodash.sortBy(curData, sorter).reverse();
         default:
-            console.error("invalid sorterDir: " + sorterDir)
-            return a;
+            console.error("invalid sorterDir: " + sorterDir);
+            return curData;
     }
 }
 
@@ -334,17 +362,17 @@ const getReviewData = (link, num, resolve) => {
         .then(res => {
             const $ = cheerio.load(res);
             const block = $("li.review");
-            return block.map((index, item) => {
+            return block.map((_, item) => {
                 // let content = $(item).find("div.review_message").text().trim();
                 let content = getContent($(item));
                 let rate = getRate($(item));
                 let info = $(item).find("div.products_reviews_list_review__info_value")
-                    .map((index, item) => {
+                    .map((_, item) => {
                         return item.children[0].data.trim();
                     }).toArray();
                 let user = getUser($(item), info)
                 let date = info.find(i => i.split('. ').length == 3);
-                return { content: content, rate: rate, user: user, date: date };
+                return { content: content, rate: Number(rate), user: user, date: date, _id: uuid4() };
             }).toArray();
         })
         .then(res => {
