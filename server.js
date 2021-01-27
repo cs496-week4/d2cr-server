@@ -6,6 +6,7 @@ const cheerio = require("cheerio");
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
+const fs = require("fs");
 const { getKeywordData, filterPredicate } = require("./api/etri");
 const { checkFakeProduct } = require("./api/checkFake");
 const scrapApi = require("./selectMethod");
@@ -27,9 +28,11 @@ const dbOption = { useNewUrlParser: true, useUnifiedTopology: true, useFindAndMo
 // MONGODB connection
 const main = mongoose.createConnection(process.env.MONGODB_URI_MAIN, dbOption);
 const sub = mongoose.createConnection(process.env.MONGODB_URI_SUB, dbOption);
+const cont = mongoose.createConnection(process.env.MONGODB_URI_CONT, dbOption);
 // MONGODB model
 const Page = main.model('page', require("./schema/page"));
 const Mall = sub.model('mall', require("./schema/mall"));
+const Cont = cont.model('contribute', require("./schema/contribute"));
 
 // 테스트용 서버사이드
 app.get('/hello', (req, res) => {
@@ -78,6 +81,8 @@ app.post("/check", (req, res) => {
     console.log("url 유효성 검사를 합니다.");
     let data = req.body;
     let hostName = new URL(data.productUrl).hostname;
+    console.log("hostname :", hostName);
+    console.log("productUrl :", data.productUrl);
     Mall.findOne({ host: hostName })
         .then(result => {
             (result == null) ? res.send("invalid") : res.send("valid");
@@ -223,6 +228,44 @@ app.get("/monthly/:pageId", (req, res) => {
         });
 })
 
+// 유저 친화적인 익스텐션을 위한 라우터
+app.get("/contribute/:id", async (req, res) => {
+    console.log("파일 읽기를 요청합니다.");
+    let objectId = req.params.id;
+    let findData = await Cont.findById(objectId);
+    console.log(findData);
+    res.send(findData);
+    res.end();
+});
+
+app.post("/contribute", async (req, res) => {
+    let data = req.body;
+    let contribute = new Cont({
+        name: data.name,
+        shop: new URL(data.shop).hostname,
+        code: data.code
+    })
+    await contribute.save();
+    res.send("등록되었습니다.");
+    res.end();
+});
+
+app.get("/accept/:id", async (req, res) => {
+    console.log("승인합니다.");
+    let objectId = req.params.id;
+    let acceptData = await Cont.findById(objectId);
+    // 파일 만들기
+    fs.writeFile(`./scrap_api/${acceptData.name}.js`, acceptData.code, (result => console.log("다 썼습니다.")));
+    // Mall 데이터 베이스에 저장하기
+    let mallData = new Mall({
+        host: acceptData.shop,
+        tag: acceptData.name
+    })
+    await mallData.save();
+    res.send();
+    res.end();
+});
+
 app.listen(3000);
 
 const inspectUrl = async (url) => {
@@ -232,7 +275,7 @@ const inspectUrl = async (url) => {
             return true;
         } else {
             let $ = cheerio.load(data);
-            if ($("li.review").html() == null) {
+            if ($("li.review").html() == null || !url.includes("cre.ma")) {
                 console.log("올바르지 못한 url 입니다.");
                 return false;
             } else {
