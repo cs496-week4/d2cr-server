@@ -1,15 +1,17 @@
-const filterApi = (tag) => {
+const scrapApi = (tag) => {
     switch (tag) {
         // TAG for cream
-        case 1:
+        case "crema_list":
             return require("./scrap_api/crema");
         // TAG for infinite scroll
-        case 2:
+        case "crema_infinite_scroll":
             return require("./scrap_api/infinite_scroll");
         // TAG for simplio
-        case 3:
+        case "simplyo.com":
             return require("./scrap_api/simplio");
         default:
             return require("./scrap_api/crema");
     }
 }
+
+module.exports = scrapApi;

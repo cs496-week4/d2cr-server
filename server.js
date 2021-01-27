@@ -8,6 +8,7 @@ const lodash = require('lodash');
 const cors = require('cors');
 const { getKeywordData, filterPredicate } = require("./api/etri");
 const { checkFakeProduct } = require("./api/checkFake");
+const scrapApi = require("./selectMethod");
 const monthlyDataFormat = {
     "1": 0,
     "2": 0,
@@ -73,35 +74,17 @@ app.get("/inspection", (req, res) => {
         .catch();
 });
 
-// 유효한 url체크 서버사이드
-// app.post("/check", (req, res) => {
-//     console.log("url 유효성 검사를 합니다.");
-//     let data = req.body;
-//     let url = data.url;
-//     let productUrl = data.productUrl;
-//     checkUrl(url)
-//         .then(valid => {
-//             if (valid) {
-//                 res.send("valid");
-//             } else {
-//                 res.send("invalid");
-//             }
-//             res.end();
-//         })
-// });
-
 app.post("/check", (req, res) => {
     console.log("url 유효성 검사를 합니다.");
     let data = req.body;
-    let url = data.url;
     let hostName = new URL(data.productUrl).hostname;
-    checkUrl(url)
-        .then(valid => {
-            if (valid) {
-                res.send("valid");
-            } else {
-                res.send("invalid");
-            }
+    Mall.findOne({ host: hostName })
+        .then(result => {
+            (result == null) ? res.send("invalid") : res.send("valid");
+            res.end();
+        })
+        .catch(_ => {
+            res.send("invalid");
             res.end();
         })
 });
@@ -137,42 +120,47 @@ app.get('/morpheme/:pageId', (req, res) => {
 });
 
 // 사이트 크롤링 요청 서버사이드
-app.post("/review", (req, res) => {
-    let data = req.body;
-    let url = data.url;
-    let productUrl = data.productUrl;
-    console.log("url: ", url);
-    console.log("product url: ", productUrl);
+app.post("/inspect", async (req, res) => {
     console.log("신호를 받음");
-    (checkInfiniteScroll(url) ?
-        require("./scrap_api/infinite_scroll") :
-        require("./scrap_api/crema"))(url)
-        // 데이터 베이스 업데이트
-        .then(results => {
-            let newResults = results.map((item, index) => ({ ...item, _id: `${index}` }));
-            if (newResults != null) {
-                let data = new Page({
-                    url: productUrl,
-                    reviews: newResults,
-                    curReviews: newResults,
-                    curQueries: "",
-                    wordCloud: [],
-                    monthlyRate: []
-                });
-                data
-                    .save()
-                    .then(result => result.id)
-                    .then(id => {
-                        res.send(id);
-                        res.end();
+    let data = req.body;
+    let urlList = data.urlList;
+    console.log(data);
+    let productUrl = data.productUrl;
+    urlList.push(productUrl);
+    let promise = urlList.map(async url => {
+        return new Promise(async resolve => {
+            let validity = await inspectUrl(url);
+            if (validity) {
+                let hostName = new URL(productUrl).hostname;
+                let result = await Mall.findOne({ host: hostName });
+                if (result == null) {
+                    res.send(null);
+                    return resolve(false);
+                } else {
+                    let tag = result.tag;
+                    let scrapData = await scrapApi(tag)(url);
+                    let formattedScrapData = scrapData.map((item, index) => ({ ...item, _id: `${index}` }));
+                    let pageData = new Page({
+                        url: productUrl,
+                        reviews: formattedScrapData,
+                        curReviews: formattedScrapData,
+                        curQueries: "",
+                        wordCloud: [],
+                        monthlyRate: []
                     });
+                    let savedData = await pageData.save();
+                    let objectId = savedData.id;
+                    console.log(objectId);
+                    res.send(objectId);
+                    return resolve(false);
+                }
             } else {
-                res.status(400);
-                res.send("Hello");
-                res.end();
+                return resolve(false);
             }
-        })
-        .catch(err => console.error(`request error: ${err}`));
+        });
+    })
+    await Promise.all(promise);
+    res.end();
 });
 
 // 데이터 필터링 서버사이드
@@ -235,28 +223,27 @@ app.get("/monthly/:pageId", (req, res) => {
         });
 })
 
-let server = app.listen(3000);
+app.listen(3000);
 
-// process.once('SIGUSR2', () => {
-//     server.close(() => {
-//         process.kill(process.pid, 'SIGUSR2')
-//     })
-// })
-
-const checkUrl = (url) => {
-    return request(url)
-        .then(result => {
-            let $ = cheerio.load(result);
-            if ($("li.review").html() == null) {
-                console.log("잘못된 데이터 입니다.");
-                return false;
-            }
+const inspectUrl = async (url) => {
+    try {
+        let data = await request(url);
+        if (data.includes("simplyo")) {
             return true;
-        })
-        .catch(err => {
-            console.error("에러: ", err);
-            return false;
-        })
+        } else {
+            let $ = cheerio.load(data);
+            if ($("li.review").html() == null) {
+                console.log("올바르지 못한 url 입니다.");
+                return false;
+            } else {
+                console.log("올바른 url 입니다.");
+                return true;
+            }
+        }
+    } catch (err) {
+        console.error("올바르지 못한 url 입니다.");
+        return false;
+    }
 }
 
 const checkInfiniteScroll = (url) => {
@@ -302,7 +289,6 @@ const monthlyDataParse = (result) => {
 
 const setCurReview = (data, rateFilter, sorter, sorterDir, search) => {
     console.log("현재 리뷰 업데이트");
-    console.log("필터 키워드: ", rateFilter, typeof rateFilter[0]);
     // 선택한 평점으로 필터링
     let curData = data
         .filter(elem => rateFilter.includes(Number(elem.rate)))
@@ -310,7 +296,6 @@ const setCurReview = (data, rateFilter, sorter, sorterDir, search) => {
     switch (sorterDir) {
         // 오름차순
         case "lower first":
-            // console.log("lower: " + curData);
             return lodash.sortBy(curData, sorter);
         // 내림차순
         case "higher first":
