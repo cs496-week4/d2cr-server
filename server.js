@@ -8,10 +8,9 @@ const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
 const uuid4 = require("uuid4");
-const { getKeywordData, filterPredicate } = require("./etri");
+const { getKeywordData, filterPredicate } = require("./api/etri");
 const { scrapInfinite } = require("./scrape-infinite-scroll");
-const { checkFakeProduct } = require("./checkFake")
-
+const { checkFakeProduct } = require("./api/checkFake")
 const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
 const monthlyDataFormat = {
     "1": 0,
@@ -21,30 +20,19 @@ const monthlyDataFormat = {
     "5": 0,
     date: null
 };
-const UserSchema = new mongoose.Schema({
-    url: String,
-    reviews: Array,
-    curReviews: Array,
-    curQueries: String,
-    wordCloud: Array,
-    monthlyRate: Array
-})
-const Page = mongoose.model("page", UserSchema);
-
-const HypeApi = new mongoose.Schema({
-    product: String,
-    company: String,
-    address: String,
-    web_address: String,
-    date: String,
-    penalty: String,
-    violate: String
-});
-const Hype = mongoose.model("hype", HypeApi);
 
 dotenv.config();
 app.use(cors());
 app.use(bodyParser.json());
+
+// MONGODB option
+const dbOption = { useNewUrlParser: true, useUnifiedTopology: true, useFindAndModify: false };
+// MONGODB connection
+const main = mongoose.createConnection(process.env.MONGODB_URI_MAIN, dbOption);
+const sub = mongoose.createConnection(process.env.MONGODB_URI_SUB, dbOption);
+// MONGODB model
+const Page = main.model('page', require("./schema/page"));
+const Block = main.model('block', require("./schema/block"));
 
 // 테스트용 서버사이드
 app.get('/hello', (req, res) => {
@@ -108,40 +96,31 @@ app.post("/check", (req, res) => {
 // 형태소 분석 리퀘스트 서버사이드
 app.get('/morpheme/:pageId', (req, res) => {
     console.log("형태소 분석 요청이 들어왔습니다.");
-    const pageId = req.params.pageId;
+    let pageId = req.params.pageId;
     let update = null;
-    connectDB("Users")
-        .then(_ => {
-            Page.findById(pageId)
-                .then(async result => {
-                    let reviews = result.reviews;
-                    // wordCloud 데이터가 없을경우
-                    if (result.wordCloud.length === 0) {
-                        let data = reviews.map(elem => elem.content).join(".");
-                        let temp = await getKeywordData(data);
-                        update = filterPredicate(temp);
-                        return update;
-                    } else {
-                        return result.wordCloud;
-                    }
-                })
-                .then(result => {
-                    res.json(result);
-                    res.end();
-                    // 데이터 베이스 업데이트
-                    if (update) {
-                        Page.findByIdAndUpdate(pageId, { wordCloud: result }, () => {
-                            console.log("업데이트");
-                            //mongoose.connection.close();
-                        });
-                    }
-                    // else {
-                    //     // mongoose.connection.close();
-                    // }
-                })
-                .catch(err => console.error(`etri api error: ${err}`));
+    Page.findById(pageId)
+        .then(async result => {
+            if (result.wordCloud.length === 0) {
+                let reviews = result.reviews;
+                let data = reviews.map(elem => elem.content).join(".");
+                let temp = await getKeywordData(data);
+                update = filterPredicate(temp);
+                return update;
+            } else {
+                return result.wordCloud;
+            }
         })
-        .catch(err => console.error(`connection error: ${err}`));
+        .then(result => {
+            res.json(result);
+            res.end();
+            // 데이터 베이스 업데이트
+            if (update) {
+                Page.findByIdAndUpdate(pageId, { wordCloud: result }, () => {
+                    console.log("업데이트");
+                });
+            }
+        })
+        .catch(err => console.error(`etri api error: ${err}`));
 });
 
 // 사이트 크롤링 요청 서버사이드
@@ -159,7 +138,6 @@ app.post("/review", (req, res) => {
                 let num = getNum(result);
                 let numElem = $("li.review").length;
                 console.log("nubmer: ", numElem);
-                // return Math.ceil(Number(num) / numElem);
                 return [Number(num), numElem];
             }
         })
@@ -195,26 +173,21 @@ app.post("/review", (req, res) => {
         // 데이터 베이스 업데이트
         .then(results => {
             if (results != null) {
-                connectDB("Users")
-                    .then(_ => {
-                        let data = new Page({
-                            url: url,
-                            reviews: results,
-                            curReviews: results,
-                            curQueries: "",
-                            wordCloud: [],
-                            monthlyRate: []
-                        });
-                        data
-                            .save()
-                            .then(result => result.id)
-                            .then(id => {
-                                // mongoose.connection.close();
-                                res.send(id);
-                                res.end();
-                            });
-                    })
-                    .catch(err => console.error(`data base connection error: ${err}`));
+                let data = new Page({
+                    url: url,
+                    reviews: results,
+                    curReviews: results,
+                    curQueries: "",
+                    wordCloud: [],
+                    monthlyRate: []
+                });
+                data
+                    .save()
+                    .then(result => result.id)
+                    .then(id => {
+                        res.send(id);
+                        res.end();
+                    });
             } else {
                 res.status(400);
                 res.send("Hello");
@@ -228,43 +201,35 @@ app.post("/review", (req, res) => {
 app.post("/page/:pageId/:offset", (req, res) => {
     console.log(req.params.pageId);
     let data = req.body;
-    // console.log(data);
-    connectDB("Users")
-        .then(_ => {
-            Page.findById(req.params.pageId)
-                .then(result => {
-                    let queries = getQueries(data)
-                    // console.log(result.curQueries);
-                    console.log(queries);
-                    if (result.curQueries !== queries) {
-                        console.log("쿼리가 다릅니다.");
-                        let curReviews = setCurReview(result.reviews, data.rateFilter, data.sorter, data.sorterDir, data.search);
-                        return Page.findByIdAndUpdate(req.params.pageId, { curQueries: queries, curReviews: curReviews }, () => {
-                            console.log("업데이트");
-                            // mongoose.connection.close();
-                            return result;
-                        });
-                    } else {
-                        return result;
-                    }
-                })
-                .then(result => {
-                    // console.log(req.params.offset);
-                    let offset = Number(req.params.offset);
-                    console.log("fetch end");
-                    let sendData = {
-                        reviews: result.curReviews.slice(offset, offset + Number(process.env.OFFSET)),
-                        reviewCount: result.curReviews.length,
-                        productUrl: result.url,
-                        _id: result._id
-                    }
-                    console.log(sendData.reviews.map(item => item.rate));
-                    res.json(sendData);
-                    res.end();
-                })
-                .catch(err => console.error(`fetch error: ${err}`));
+    Page.findById(req.params.pageId)
+        .then(result => {
+            let queries = getQueries(data)
+            console.log(queries);
+            if (result.curQueries !== queries) {
+                console.log("쿼리가 다릅니다.");
+                let curReviews = setCurReview(result.reviews, data.rateFilter, data.sorter, data.sorterDir, data.search);
+                return Page.findByIdAndUpdate(req.params.pageId, { curQueries: queries, curReviews: curReviews }, () => {
+                    console.log("업데이트");
+                    return result;
+                });
+            } else {
+                return result;
+            }
         })
-        .catch(err => console.error(`data base connection error: ${err}`));
+        .then(result => {
+            let offset = Number(req.params.offset);
+            console.log("fetch end");
+            let sendData = {
+                reviews: result.curReviews.slice(offset, offset + Number(process.env.OFFSET)),
+                reviewCount: result.curReviews.length,
+                productUrl: result.url,
+                _id: result._id
+            }
+            console.log(sendData.reviews.map(item => item.rate));
+            res.json(sendData);
+            res.end();
+        })
+        .catch(err => console.error(`fetch error: ${err}`));
 });
 
 //  월별 데이터 분석 서버사이드
@@ -272,34 +237,33 @@ app.get("/monthly/:pageId", (req, res) => {
     console.log("월별데이터 분석 요청이 들어왔습니다.");
     const pageId = req.params.pageId;
     let update = null;
-    connectDB("Users")
-        .then(_ => {
-            Page.findById(pageId)
-                .then(result => {
-                    if (result.monthlyRate.length === 0) {
-                        update = monthlyDataParse(result);
-                        return update;
-                    } else {
-                        return result.monthlyRate;
-                    }
-                })
-                .then(result => {
-                    res.send(result);
-                    res.end();
-                    if (update) {
-                        Page.findByIdAndUpdate(pageId, { monthlyRate: result }, () => {
-                            console.log("업데이트");
-                            //mongoose.connection.close();
-                        });
-                    } else {
-                        // mongoose.connection.close();
-                    }
-                })
-                .catch(err => console.log(`잘못된 페이지 아이디(${pageId})입니다: ${err}`));
+    Page.findById(pageId)
+        .then(result => {
+            if (result.monthlyRate.length === 0) {
+                update = monthlyDataParse(result);
+                return update;
+            } else {
+                return result.monthlyRate;
+            }
+        })
+        .then(result => {
+            res.send(result);
+            res.end();
+            if (update) {
+                Page.findByIdAndUpdate(pageId, { monthlyRate: result }, () => {
+                    console.log("업데이트");
+                });
+            }
         });
 })
 
-app.listen(3000);
+let server = app.listen(3000);
+
+process.once('SIGUSR2', () => {
+    server.close(() => {
+        process.kill(process.pid, 'SIGUSR2')
+    })
+})
 
 const checkUrl = (url) => {
     return request(url)
@@ -455,15 +419,4 @@ const getUser = (item, info) => {
             return null;
         }
     }
-}
-
-const connectDB = (dataBase) => {
-    return mongoose
-        .connect("mongodb://127.0.0.1:27017/" + dataBase, {
-            useNewUrlParser: true,
-            useCreateIndex: true,
-            useUnifiedTopology: true
-        })
-        .then(() => console.log("connect to DB"))
-        .catch(err => console.error(err));
 }

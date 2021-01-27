@@ -10,13 +10,13 @@ const getKeywordData = async (text) => {
     }
     // 헤더 설정
     const requestJson = {
-        'access_key': process.env.ACCESS_KEY,
+        'access_key': process.env.ETRI_ACCESS_KEY,
         'argument': {
             'text': text,
             'analysis_code': process.env.ANALYSIS_CODE
         }
     };
-    const openApiURL = process.env.OPEN_URL + process.env.SPOKEN;
+    const openApiURL = process.env.ETRI_OPEN_URL + process.env.SPOKEN;
     // Request Body
     const options = {
         url: openApiURL,

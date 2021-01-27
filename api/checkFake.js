@@ -1,13 +1,14 @@
 const convert = require('xml-js');
 const request = require("request-promise-native");
 const Promise = require("bluebird");
+const dotenv = require('dotenv');
+dotenv.config()
 
-const API_KEY = "kGBDjFyGfIat%2BsqLpgK8U9JLu4FQdgPeV6WesOx6nx4lyrw9YnqVQZd4lkWeFF9Yh5alt3eIO%2FKWBam2uXRiGQ%3D%3D";
 const REQUEST_URL = (row, page, key) => `http://apis.data.go.kr/1470000/FoodFlshdErtsInfoService/getFoodFlshdErtsItem?ServiceKey=${key}&numOfRows=${row}&pageNo=${page}`;
 
 
 const checkFakeProduct = () => {
-    return request(REQUEST_URL(1, 1, API_KEY))
+    return request(REQUEST_URL(1, 1, process.env.FOOD_ACCESS_API))
         .then(res => {
             let xmlToJson = JSON.parse(convert.xml2json(res, { compact: true, spaces: 4 }));
             let total = Number(xmlToJson.response.body.totalCount._text);
@@ -31,9 +32,8 @@ const checkFakeProduct = () => {
         .catch(err => console.log(`api error: ${err}`));
 }
 
-
 const getData = async (row, page, resolve) => {
-    request(REQUEST_URL(row, page, API_KEY))
+    request(REQUEST_URL(row, page, process.env.FOOD_ACCESS_API))
         .then(res => {
             let xmlToJson = JSON.parse(convert.xml2json(res, { compact: true, spaces: 4 }));
             let info = xmlToJson.response.body.items.item;
