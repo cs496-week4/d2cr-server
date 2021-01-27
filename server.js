@@ -31,6 +31,17 @@ const UserSchema = new mongoose.Schema({
 })
 const Page = mongoose.model("page", UserSchema);
 
+const HypeApi = new mongoose.Schema({
+    product: String,
+    company: String,
+    address: String,
+    web_address: String,
+    date: String,
+    penalty: String,
+    violate: String
+});
+const Hype = mongoose.model("hype", HypeApi);
+
 dotenv.config();
 app.use(cors());
 app.use(bodyParser.json());
@@ -160,7 +171,11 @@ app.post("/review", (req, res) => {
                 // case2: 무한 스크롤 웹사이트
             } else if (checkInfiniteScroll(url)) {
                 console.log("무한 스크롤 크롤링을 진행합니다.");
-                return scrapInfinite(url, result[0]);
+                return scrapInfinite(url, result[0])
+                    .then(res => res.map(item => {
+                        item._id = uuid4();
+                        return item;
+                    }));
                 // case3: 가장 일반적인 웹사이트
             } else {
                 let num = Math.ceil(result[0] / result[1]);

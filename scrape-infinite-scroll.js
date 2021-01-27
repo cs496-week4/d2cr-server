@@ -1,8 +1,9 @@
+const uuid4 = require("uuid4");
 const puppeteer = require("puppeteer");
 const PuppeteerNetworkMonitor = require('./PuppeteerNetworkMonitor');
-const uuid4 = require("uuid4");
 
 function extractItems() {
+    // const uuid4 = require("uuid4");
     const extractedElements = document.querySelectorAll("div.products_reviews_list_review__inner");
     const items = [];
     for (let element of extractedElements) {
@@ -12,7 +13,7 @@ function extractItems() {
             rate: 5 - element.querySelectorAll("span.star--empty").length,
             user: info[0].innerText,
             date: info[1].innerText,
-            _id: uuid4()
+            _id: ""
         });
     }
     return items;
@@ -43,7 +44,10 @@ const scrapeInfiniteScrollItems = async (
             // 서버와의 리퀘스트를 방해하지 않기 위해서 딜레이를 걸어줌
             // await page.waitForFunction('document.body.scrollHeight' != '');
         }
-    } catch (e) { }
+    } catch (err) {
+        console.log(`scrap error: ${err}`);
+        return null;
+    }
     return items;
 }
 
