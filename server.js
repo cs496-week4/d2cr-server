@@ -1,17 +1,13 @@
-const dotenv = require('dotenv'); // .evn 파일 로드
+const dotenv = require('dotenv');
 const express = require('express'); const app = express();
 const bodyParser = require('body-parser');
-const request = require("request-promise-native"); // request를 promise로 변환
+const request = require("request-promise-native");
 const cheerio = require("cheerio");
-const Promise = require("bluebird"); // 프로미스 리스트를 기다림 + 동시적인 처리
 const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
-const uuid4 = require("uuid4");
 const { getKeywordData, filterPredicate } = require("./api/etri");
-const { scrapInfinite } = require("./scrape-infinite-scroll");
-const { checkFakeProduct } = require("./api/checkFake")
-const rateWordList = ["별로에요", "그냥 그래요", "보통이에요", "맘에 들어요", "아주 좋아요"];
+const { checkFakeProduct } = require("./api/checkFake");
 const monthlyDataFormat = {
     "1": 0,
     "2": 0,
@@ -32,7 +28,7 @@ const main = mongoose.createConnection(process.env.MONGODB_URI_MAIN, dbOption);
 const sub = mongoose.createConnection(process.env.MONGODB_URI_SUB, dbOption);
 // MONGODB model
 const Page = main.model('page', require("./schema/page"));
-const Block = main.model('block', require("./schema/block"));
+const Mall = sub.model('mall', require("./schema/mall"));
 
 // 테스트용 서버사이드
 app.get('/hello', (req, res) => {
@@ -41,33 +37,33 @@ app.get('/hello', (req, res) => {
     res.end();
 });
 
-// 크롤링 테스트용 서버사이드
-app.get("/results", (req, respond) => {
-    let link = "https://review4.cre.ma/xexymix.com/products/reviews?app=0&atarget=reviews&iframe=1&iframe_id=crema-product-reviews-1&infinite_scroll=1&nonmember_token=&page=500&parent_url=https%3A%2F%2Fwww.xexymix.com%2Fshop%2Fshopdetail.html%3Fbranduid%3D2060466%26xcode%3D005%26mcode%3D002%26scode%3D%26special%3D1%26GfDT%3DbG53Vg%253D%253D&product_code=2060466&secure_device_token=V2fdbc5442798f5a6c1996e7785c5182001e021480b40b74f7a45e2a08d919f7ef&widget_env=100&widget_style="
-    request(link)
-        .then(res => {
-            var $ = cheerio.load(res);
-            var num = getNum(res);
-            var numElem = $("li.review").length;
-            console.log("nubmer: ", numElem);
-            return Math.ceil(Number(num) / numElem);
-        })
-        .then(res => {
-            console.log(res);
-            let requests = Array.from(Array(res), (_, i) => i);
-            Promise.map(requests, (request) => {
-                return new Promise(resolve => getReviewData(link, request, resolve));
-            }, { concurrency: 10 })
-                .then(results => results.flatMap(result => result))
-                .then(results => {
-                    respond.json(results);
-                    respond.end();
-                });
-        })
-        .catch(err => console.log("request error: ", err));
+// 데이터 베이스 세팅
+app.post("/", (req, res) => {
+    console.log("데이터 베이스 세팅");
+    let data = req.body;
+    let hostName = new URL(data.productUrl).hostname;
+    let tag = data.tag;
+    let mallData = new Mall({ host: hostName, tag: tag });
+    mallData.save()
+        .then(_ => {
+            console.log("완료!!");
+            res.send(hostName);
+            res.end();
+        });
 });
 
-// 
+// url 반환
+app.get("/product/:pageId", (req, res) => {
+    console.log("URL 반환요청이 들어왔습니다.");
+    let objectId = req.params.pageId;
+    Page.findById(objectId)
+        .then(result => {
+            console.log(result.url)
+            res.json({ productUrl: result.url })
+            res.end()
+        })
+})
+
 app.get("/inspection", (req, res) => {
     checkFakeProduct()
         .then(result => {
@@ -78,10 +74,27 @@ app.get("/inspection", (req, res) => {
 });
 
 // 유효한 url체크 서버사이드
+// app.post("/check", (req, res) => {
+//     console.log("url 유효성 검사를 합니다.");
+//     let data = req.body;
+//     let url = data.url;
+//     let productUrl = data.productUrl;
+//     checkUrl(url)
+//         .then(valid => {
+//             if (valid) {
+//                 res.send("valid");
+//             } else {
+//                 res.send("invalid");
+//             }
+//             res.end();
+//         })
+// });
+
 app.post("/check", (req, res) => {
     console.log("url 유효성 검사를 합니다.");
     let data = req.body;
     let url = data.url;
+    let hostName = new URL(data.productUrl).hostname;
     checkUrl(url)
         .then(valid => {
             if (valid) {
@@ -127,56 +140,21 @@ app.get('/morpheme/:pageId', (req, res) => {
 app.post("/review", (req, res) => {
     let data = req.body;
     let url = data.url;
+    let productUrl = data.productUrl;
+    console.log("url: ", url);
+    console.log("product url: ", productUrl);
     console.log("신호를 받음");
-    request(url)
-        .then(result => {
-            let $ = cheerio.load(result);
-            if ($("li.review").html() == null) {
-                console.log("잘못된 데이터 입니다.");
-                return null
-            } else {
-                let num = getNum(result);
-                let numElem = $("li.review").length;
-                console.log("nubmer: ", numElem);
-                return [Number(num), numElem];
-            }
-        })
-        .then(result => {
-            console.log(result);
-            // case1: 유효하지 않은 웹사이트
-            if (result == null) {
-                return null;
-                // case2: 무한 스크롤 웹사이트
-            } else if (checkInfiniteScroll(url)) {
-                console.log("무한 스크롤 크롤링을 진행합니다.");
-                return scrapInfinite(url, result[0])
-                    .then(res => res.map(item => {
-                        item._id = uuid4();
-                        return item;
-                    }));
-                // case3: 가장 일반적인 웹사이트
-            } else {
-                let num = Math.ceil(result[0] / result[1]);
-                let requests = Array.from(Array(num), (_, i) => i + 1);
-                return Promise
-                    .map(requests,
-                        (request) => {
-                            return new Promise(resolve => getReviewData(url, request, resolve));
-                        },
-                        {
-                            concurrency: Number(process.env.CONCUR_CONSTANT)
-                        })
-                    .then(results => results.flatMap(result => result))
-                    .catch(err => console.error(`scrap error: ${err}`))
-            }
-        })
+    (checkInfiniteScroll(url) ?
+        require("./scrap_api/infinite_scroll") :
+        require("./scrap_api/crema"))(url)
         // 데이터 베이스 업데이트
         .then(results => {
-            if (results != null) {
+            let newResults = results.map((item, index) => ({ ...item, _id: `${index}` }));
+            if (newResults != null) {
                 let data = new Page({
-                    url: url,
-                    reviews: results,
-                    curReviews: results,
+                    url: productUrl,
+                    reviews: newResults,
+                    curReviews: newResults,
                     curQueries: "",
                     wordCloud: [],
                     monthlyRate: []
@@ -259,11 +237,11 @@ app.get("/monthly/:pageId", (req, res) => {
 
 let server = app.listen(3000);
 
-process.once('SIGUSR2', () => {
-    server.close(() => {
-        process.kill(process.pid, 'SIGUSR2')
-    })
-})
+// process.once('SIGUSR2', () => {
+//     server.close(() => {
+//         process.kill(process.pid, 'SIGUSR2')
+//     })
+// })
 
 const checkUrl = (url) => {
     return request(url)
@@ -346,77 +324,4 @@ const setCurReview = (data, rateFilter, sorter, sorterDir, search) => {
 const getQueries = (data) => {
     data.rateFilter = data.rateFilter.sort();
     return JSON.stringify(data);
-}
-
-const getReviewData = (link, num, resolve) => {
-    let url = new URL(link);
-    url.searchParams.set("page", num);
-    request(url.toString())
-        .then(res => {
-            const $ = cheerio.load(res);
-            const block = $("li.review");
-            return block.map((_, item) => {
-                // let content = $(item).find("div.review_message").text().trim();
-                let content = getContent($(item));
-                let rate = getRate($(item));
-                let info = $(item).find("div.products_reviews_list_review__info_value")
-                    .map((_, item) => {
-                        return item.children[0].data.trim();
-                    }).toArray();
-                let user = getUser($(item), info)
-                let date = info.find(i => i.split('. ').length == 3);
-                return { content: content, rate: Number(rate), user: user, date: date, _id: uuid4() };
-            }).toArray();
-        })
-        .then(res => {
-            // console.log(res);
-            return resolve(res);
-        })
-        .catch(err => console.log("error: ", err));
-}
-
-const getNum = (res) => {
-    const $ = cheerio.load(res);
-    var num = $("span.reviews-count").text().replace(/,/g, "");
-    if (num != "") {
-        return num;
-    } else {
-        var summary = $("div.product_summary__item");
-        summary.each((index, item) => {
-            let label = $(item).find("div.product_summary__label")[0].children[0].data;
-            if (label == "리뷰") {
-                num = $(item).find("div.product_summary__count")[0].children[0].data;
-            }
-        })
-        return num;
-    }
-}
-
-const getContent = (item) => {
-    return item.find("div.js-translate-review-message")[0].children[0].data.trim();
-}
-
-const getRate = (item) => {
-    let temp = item.find("div.products_reviews_list_review__score_text_rating").text().replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
-    let rateWord = (temp != '') ? temp : item.find("div.review_list__score_right_item")[0].children[0].data.replace(/[\{\}\[\]\/?.,;:|\)*~`!^\-+<>@\#$%&\\\=\(\'\"]/gi, "").trim();
-    let position = rateWordList.indexOf(rateWord);
-    return rate = (position == -1)
-        ? (5 - $(item).find('div.products_reviews_list_review__score_star_rating')
-            .children("span.star--empty").length)
-        : position + 1;
-}
-
-const getUser = (item, info) => {
-    let temp1 = info.find(i => i.includes("*"));
-    // console.log(temp1);
-    if (temp1 != undefined) {
-        return temp1;
-    } else {
-        let temp2 = item.find("div.review_list__author")[0];
-        if (temp2 != undefined) {
-            return temp2.children[0].data.trim();
-        } else {
-            return null;
-        }
-    }
 }

@@ -38,10 +38,10 @@ const getKeywordData = async (text) => {
                     let lemma = morphemeInfo.lemma;
                     let morpheme = morphemesMap.get(lemma);
                     if (morpheme == null) {
-                        morpheme = { value: lemma, type: morphemeInfo.type, count: 1 };
+                        morpheme = { text: lemma, type: morphemeInfo.type, value: 1 };
                         morphemesMap.set(lemma, morpheme);
                     } else {
-                        morpheme.count = morpheme.count + 1;
+                        morpheme.value = morpheme.value + 1;
                     }
                     // 개체명 분석 결과 수집 및 정렬
                     let nameEntityRecognitionReuslt = sentence.NE;
@@ -49,10 +49,10 @@ const getKeywordData = async (text) => {
                         let name = nameEntityInfo.value;
                         let nameEntity = nameEntitiesMap.get(name);
                         if (nameEntity == null) {
-                            nameEntity = { value: name, type: nameEntityInfo.type, count: 1 };
+                            nameEntity = { text: name, type: nameEntityInfo.type, value: 1 };
                             nameEntitiesMap.set(name, nameEntity);
                         } else {
-                            nameEntity.count = nameEntity.count + 1;
+                            nameEntity.value = nameEntity.value + 1;
                         }
                     }
                 }
@@ -61,14 +61,14 @@ const getKeywordData = async (text) => {
             if (0 < morphemesMap.size) {
                 morphemes = Array.from(morphemesMap.values());
                 morphemes.sort((morpheme1, morpheme2) => {
-                    return morpheme2.count - morpheme1.count;
+                    return morpheme2.value - morpheme1.value;
                 });
             }
             // 단어 빈도순으로 정렬
             if (0 < nameEntitiesMap.size) {
                 nameEntities = Array.from(nameEntitiesMap.values());
                 nameEntities.sort((nameEntity1, nameEntity2) => {
-                    return nameEntity2.count - nameEntity1.count;
+                    return nameEntity2.value - nameEntity1.value;
                 });
             }
             return morphemes;

@@ -1,9 +1,24 @@
-const uuid4 = require("uuid4");
+const request = require("request-promise-native");
+const cheerio = require("cheerio");
 const puppeteer = require("puppeteer");
 const PuppeteerNetworkMonitor = require('./PuppeteerNetworkMonitor');
 
-function extractItems() {
-    // const uuid4 = require("uuid4");
+const getReviewInfinite = (url) => {
+    return request(url)
+        .then(result => {
+            let $ = cheerio.load(result);
+            let num = getNum(result);
+            let numElem = $("li.review").length;
+            console.log("nubmer: ", numElem);
+            return [Number(num), numElem];
+        })
+        .then(result => {
+            console.log("무한 스크롤 크롤링을 진행합니다.");
+            return scrapInfinite(url, result[0])
+        });
+}
+
+const extractItems = () => {
     const extractedElements = document.querySelectorAll("div.products_reviews_list_review__inner");
     const items = [];
     for (let element of extractedElements) {
@@ -40,9 +55,8 @@ const scrapeInfiniteScrollItems = async (
             await button.evaluate(button => button.click());
             // 스크롤이 반응이 없을 경우 일정 시간까지 기다려줌
             await page.waitForFunction(`document.body.scrollHeight > ${previousHeight}`);
-            await monitorRequests.waitForAllRequests();
             // 서버와의 리퀘스트를 방해하지 않기 위해서 딜레이를 걸어줌
-            // await page.waitForFunction('document.body.scrollHeight' != '');
+            await monitorRequests.waitForAllRequests();
         }
     } catch (err) {
         console.log(`scrap error: ${err}`);
@@ -71,11 +85,26 @@ const scrapInfinite = async (url, itemTargetCount) => {
     await page.setRequestInterception(true);
     // Scroll and extract items from the page.
     const items = await scrapeInfiniteScrollItems(page, extractItems, itemTargetCount);
-    // Save extracted items to a file.
-    // console.log(items);
     // 브라우저 창 닫기
     await browser.close();
     return items;
 }
 
-module.exports = { scrapInfinite }
+const getNum = (res) => {
+    const $ = cheerio.load(res);
+    var num = $("span.reviews-count").text().replace(/,/g, "");
+    if (num != "") {
+        return num;
+    } else {
+        var summary = $("div.product_summary__item");
+        summary.each((index, item) => {
+            let label = $(item).find("div.product_summary__label")[0].children[0].data;
+            if (label == "리뷰") {
+                num = $(item).find("div.product_summary__count")[0].children[0].data;
+            }
+        })
+        return num;
+    }
+}
+
+module.exports = getReviewInfinite;
