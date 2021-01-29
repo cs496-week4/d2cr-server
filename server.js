@@ -7,9 +7,22 @@ const mongoose = require('mongoose');
 const lodash = require('lodash');
 const cors = require('cors');
 const fs = require("fs");
+const path = require("path");
+const mime = require("mime");
 const { getKeywordData, filterPredicate } = require("./api/etri");
 const { checkFakeProduct } = require("./api/checkFake");
 const scrapApi = require("./selectMethod");
+const multer = require("multer");
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, "./contribute/")
+    },
+    filename: function (req, file, cb) {
+        cb(null, file.originalname)
+    }
+});
+const upload = multer({ storage: storage });
+
 const monthlyDataFormat = {
     "1": 0,
     "2": 0,
@@ -22,6 +35,7 @@ const monthlyDataFormat = {
 dotenv.config();
 app.use(cors());
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // MONGODB option
 const dbOption = { useNewUrlParser: true, useUnifiedTopology: true, useFindAndModify: false };
@@ -58,13 +72,16 @@ app.post("/", (req, res) => {
 
 // url 반환
 app.get("/product/:pageId", (req, res) => {
-    console.log("URL 반환요청이 들어왔습니다.");
     let objectId = req.params.pageId;
+    console.log("URL 반환요청이 들어왔습니다: ", objectId);
     Page.findById(objectId)
         .then(result => {
             console.log(result.url)
             res.json({ productUrl: result.url })
             res.end()
+        })
+        .catch(_ => {
+            console.log("find error: 해당 아이디를 찾을 수 없습니다.")
         })
 })
 
@@ -136,6 +153,7 @@ app.post("/inspect", async (req, res) => {
         return new Promise(async resolve => {
             let validity = await inspectUrl(url);
             if (validity) {
+                console.log(productUrl);
                 let hostName = new URL(productUrl).hostname;
                 let result = await Mall.findOne({ host: hostName });
                 if (result == null) {
@@ -225,45 +243,140 @@ app.get("/monthly/:pageId", (req, res) => {
                     console.log("업데이트");
                 });
             }
-        });
+        })
+        .catch(err => console.log("형태소 분석에 실패했습니다."));
 })
 
+
+
 // 유저 친화적인 익스텐션을 위한 라우터
-app.get("/contribute/:id", async (req, res) => {
+app.get("/contribute", async (req, res) => {
     console.log("파일 읽기를 요청합니다.");
-    let objectId = req.params.id;
-    let findData = await Cont.findById(objectId);
-    console.log(findData);
+    let findData = await Cont.find({});
     res.send(findData);
     res.end();
 });
 
-app.post("/contribute", async (req, res) => {
+app.post("/contribute", upload.single("file"), async (req, res, next) => {
+    console.log("컨트리뷰트 데이터가 들어왔습니다.");
     let data = req.body;
-    let contribute = new Cont({
-        name: data.name,
-        shop: new URL(data.shop).hostname,
-        code: data.code
+    console.log(req.body);
+    console.log(data.malls);
+    console.log(req.file);
+    let mallList = JSON.parse(data.malls).list;
+    let malls = mallList.map(url => {
+        try {
+            return new URL(url).hostname;
+        } catch (err) {
+            return url;
+        }
     })
-    await contribute.save();
-    res.send("등록되었습니다.");
-    res.end();
+    console.log(malls);
+    let contribute = new Cont({
+        email: data.email,
+        desc: data.desc,
+        file: req.file.originalname,
+        malls: malls,
+        status: "pending"
+    })
+    try {
+        await contribute.save();
+        res.send("success");
+        res.end();
+    } catch (err) {
+        console.log("DB에 저장하지 못했습니다.");
+        res.send("fail");
+        res.end();
+    }
+
 });
 
-app.get("/accept/:id", async (req, res) => {
+app.post("/contribute/accept/:contributeId", async (req, res) => {
     console.log("승인합니다.");
-    let objectId = req.params.id;
-    let acceptData = await Cont.findById(objectId);
-    // 파일 만들기
-    fs.writeFile(`./scrap_api/${acceptData.name}.js`, acceptData.code, (result => console.log("다 썼습니다.")));
-    // Mall 데이터 베이스에 저장하기
-    let mallData = new Mall({
-        host: acceptData.shop,
-        tag: acceptData.name
-    })
-    await mallData.save();
-    res.send();
-    res.end();
+    // 이름으로 DB에서 데이터 찾기
+    let objectId = req.params.contributeId;
+    Cont.findById(objectId)
+        .then(target => {
+            console.log(target);
+            let targetName = target.file;
+            let oldPath = `./contribute/${targetName}`;
+            let newPath = `./scrap_api/${targetName}`;
+            fs.rename(oldPath, newPath, (err) => {
+                if (err) {
+                    console.log(`해당파일이 존재하지 않습니다: ${targetName}`);
+                    res.send("fail");
+                    res.end()
+                } else {
+                    // status 업데이트
+                    Cont.findByIdAndUpdate(objectId, { status: "accepted" }, async () => {
+                        console.log("업데이트");
+                        // Mall에 API 정보 저장하기
+                        let tag = target.file.replace(".js", "");
+                        let promise = target.malls.map(mall => {
+                            let mallData = new Mall({
+                                host: mall,
+                                tag: tag
+                            })
+                            return mallData.save();
+                        })
+                        await Promise.all(promise);
+                        res.send("success");
+                        res.end();
+                    });
+                }
+            })
+        })
+        .catch(err => console.log(`해당 아이디가 졶재하지 않습니다: ${objectId}`));
+});
+
+app.post("/contribute/reject/:contributeId", async (req, res) => {
+    console.log("거절합니다.");
+    // 이름으로 DB에서 데이터 찾기
+    let objectId = req.params.contributeId;
+    Cont.findById(objectId)
+        .then(target => {
+            console.log(target);
+            let targetName = target.file;
+            let oldPath = `./contribute/${targetName}`;
+            let newPath = `./rejected_api/${targetName}`;
+            fs.rename(oldPath, newPath, (err) => {
+                if (err) {
+                    console.log(`해당파일이 존재하지 않습니다: ${targetName}`);
+                    res.send("fail");
+                    res.end()
+                } else {
+                    // status 업데이트
+                    Cont.findByIdAndUpdate(objectId, { status: "rejected" }, () => {
+                        console.log("업데이트");
+                        res.send("success");
+                        res.end();
+                    });
+                }
+            })
+        })
+        .catch(err => console.log(`해당 아이디가 졶재하지 않습니다: ${objectId}`));
+});
+
+app.get("/contribute/download/:contributeId", (req, res) => {
+    console.log("파일을 다운로드 합니다.");
+    let objectId = req.params.contributeId;
+    // DB에서 탐색 시작
+    Cont.findById(objectId)
+        .then(result => {
+            let filePath = (result.status == "pending") ? "contribute" : "scrap_api";
+            let file = __dirname + `/${filePath}/${result.file}`;
+            let filename = path.basename(file);
+            let mimetype = mime.lookup(file);
+            res.setHeader('Content-disposition', 'attachment; filename=' + filename);
+            res.setHeader('Content-type', mimetype);
+            let filestream = fs.createReadStream(file);
+            filestream.pipe(res);
+        })
+        .catch(_ => {
+            console.log("해당 아이디가 존재하지 않습니다.");
+            res.send("fail");
+            res.end();
+        })
 });
 
 app.listen(3000);

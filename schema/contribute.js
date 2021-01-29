@@ -1,9 +1,12 @@
 const mongoose = require("mongoose");
 
 const UserSchema = new mongoose.Schema({
-    name: String,
-    shop: String,
-    code: String,
+    email: String,
+    desc: String,
+    file: Object,
+    malls: Array,
+    Status: String,
+    status: String
 });
 
 module.exports = UserSchema;
